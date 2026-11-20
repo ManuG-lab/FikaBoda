@@ -1,0 +1,505 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Core authenticated user profile and RBAC state.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "fullName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "email": { "type": "string", "maxLength": 200 },
+        "phoneNumber": { "type": "string", "maxLength": 24 },
+        "role": { "type": "string", "enum": ["SUPER_ADMIN", "ADMIN", "DISPATCHER", "MERCHANT", "RIDER"] },
+        "accountStatus": { "type": "string", "enum": ["PENDING", "ACTIVE", "SUSPENDED", "REJECTED"] },
+        "profilePhoto": { "type": "string", "maxLength": 512 },
+        "fcmToken": { "type": "string", "maxLength": 512 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "lastLogin": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "fullName", "email", "phoneNumber", "role", "accountStatus", "createdAt", "lastLogin"]
+    },
+    "AdminRole": {
+      "title": "AdminRole",
+      "description": "Authoritative administrative and dispatcher role assignment.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "maxLength": 200 },
+        "role": { "type": "string", "enum": ["SUPER_ADMIN", "ADMIN", "DISPATCHER"] },
+        "assignedBy": { "type": "string", "maxLength": 128 },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role", "assignedBy", "active", "createdAt"]
+    },
+    "Shop": {
+      "title": "Shop",
+      "description": "Independent Nairobi merchant shop profile.",
+      "type": "object",
+      "properties": {
+        "shopId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "shopName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "businessCategory": { "type": "string", "maxLength": 80 },
+        "contactPerson": { "type": "string", "maxLength": 120 },
+        "phoneNumber": { "type": "string", "maxLength": 24 },
+        "email": { "type": "string", "maxLength": 200 },
+        "physicalAddress": { "type": "string", "maxLength": 240 },
+        "location": { "type": "object" },
+        "operatingHours": { "type": "string", "maxLength": 120 },
+        "verificationStatus": { "type": "string", "enum": ["PENDING", "VERIFIED", "REJECTED"] },
+        "status": { "type": "string", "enum": ["PENDING_APPROVAL", "ACTIVE", "SUSPENDED"] },
+        "zoneId": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "shopId",
+        "ownerUid",
+        "shopName",
+        "businessCategory",
+        "contactPerson",
+        "phoneNumber",
+        "email",
+        "physicalAddress",
+        "location",
+        "operatingHours",
+        "verificationStatus",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Rider": {
+      "title": "Rider",
+      "description": "Verified boda boda rider profile, compliance docs, and live location.",
+      "type": "object",
+      "properties": {
+        "riderId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "fullName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "phoneNumber": { "type": "string", "maxLength": 24 },
+        "email": { "type": "string", "maxLength": 200 },
+        "nationalIdReference": { "type": "string", "maxLength": 64 },
+        "drivingLicenceRef": { "type": "string", "maxLength": 80 },
+        "motorcycleRegistration": { "type": "string", "maxLength": 32 },
+        "insuranceDetails": { "type": "string", "maxLength": 120 },
+        "emergencyContact": { "type": "string", "maxLength": 120 },
+        "verificationDocRefs": { "type": "object" },
+        "licenceVerificationStatus": { "type": "string", "enum": ["PENDING", "VERIFIED", "REJECTED"] },
+        "insuranceVerificationStatus": { "type": "string", "enum": ["PENDING", "VERIFIED", "REJECTED"] },
+        "approvalStatus": { "type": "string", "enum": ["PENDING", "APPROVED", "SUSPENDED", "REJECTED"] },
+        "availabilityStatus": { "type": "string", "enum": ["ONLINE", "OFFLINE", "ON_DELIVERY"] },
+        "currentLocation": { "type": "object" },
+        "lastLocationUpdate": { "type": "string", "format": "date-time" },
+        "rating": { "type": "number" },
+        "totalDeliveries": { "type": "number" },
+        "totalEarnings": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "riderId",
+        "uid",
+        "fullName",
+        "phoneNumber",
+        "email",
+        "nationalIdReference",
+        "motorcycleRegistration",
+        "licenceVerificationStatus",
+        "insuranceVerificationStatus",
+        "approvalStatus",
+        "availabilityStatus",
+        "rating",
+        "totalDeliveries",
+        "totalEarnings",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "RiderVerificationDoc": {
+      "title": "RiderVerificationDoc",
+      "description": "PII-isolated verification document payload submitted by a rider for admin review.",
+      "type": "object",
+      "properties": {
+        "docKey": { "type": "string", "enum": ["nationalId", "drivingLicence", "insurance"] },
+        "riderId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "fileName": { "type": "string", "maxLength": 160 },
+        "mimeType": { "type": "string", "enum": ["image/jpeg", "image/png", "image/webp", "application/pdf"] },
+        "byteSize": { "type": "number" },
+        "dataUrl": { "type": "string", "maxLength": 960000 },
+        "storagePath": { "type": "string", "maxLength": 300 },
+        "verificationStatus": { "type": "string", "enum": ["PENDING", "VERIFIED", "REJECTED"] },
+        "reviewedBy": { "type": "string", "maxLength": 128 },
+        "reviewNotes": { "type": "string", "maxLength": 300 },
+        "uploadedAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["docKey", "riderId", "uid", "fileName", "mimeType", "byteSize", "verificationStatus", "uploadedAt", "updatedAt"]
+    },
+    "DeliveryEvidence": {
+      "title": "DeliveryEvidence",
+      "description": "Pickup photo proof attached by rider during parcel collection.",
+      "type": "object",
+      "properties": {
+        "evidenceId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "jobId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "shopOwnerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "riderUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "evidenceType": { "type": "string", "enum": ["PICKUP_PHOTO"] },
+        "fileName": { "type": "string", "maxLength": 160 },
+        "mimeType": { "type": "string", "enum": ["image/jpeg", "image/png", "image/webp"] },
+        "byteSize": { "type": "number" },
+        "dataUrl": { "type": "string", "maxLength": 960000 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["evidenceId", "jobId", "shopOwnerUid", "riderUid", "evidenceType", "fileName", "mimeType", "byteSize", "dataUrl", "createdAt"]
+    },
+    "DeliveryJob": {
+      "title": "DeliveryJob",
+      "description": "Core delivery dispatch and lifecycle document.",
+      "type": "object",
+      "properties": {
+        "jobId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "referenceCode": { "type": "string", "maxLength": 32 },
+        "shopId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "shopOwnerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "shopName": { "type": "string", "maxLength": 120 },
+        "riderId": { "type": "string", "maxLength": 128 },
+        "riderUid": { "type": "string", "maxLength": 128 },
+        "riderName": { "type": "string", "maxLength": 120 },
+        "riderPhone": { "type": "string", "maxLength": 24 },
+        "customerName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "customerPhone": { "type": "string", "minLength": 7, "maxLength": 24 },
+        "pickupAddress": { "type": "string", "maxLength": 240 },
+        "pickupCoordinates": { "type": "object" },
+        "pickupInstructions": { "type": "string", "maxLength": 300 },
+        "deliveryAddress": { "type": "string", "maxLength": 240 },
+        "deliveryCoordinates": { "type": "object" },
+        "deliveryInstructions": { "type": "string", "maxLength": 300 },
+        "packageCategory": { "type": "string", "maxLength": 64 },
+        "packageDescription": { "type": "string", "maxLength": 240 },
+        "packageSize": { "type": "string", "enum": ["SMALL", "MEDIUM", "LARGE"] },
+        "specialHandling": { "type": "string", "maxLength": 160 },
+        "roadDistanceKm": { "type": "number" },
+        "estimatedDuration": { "type": "number" },
+        "deliveryFee": { "type": "number" },
+        "riderEarning": { "type": "number" },
+        "platformRevenue": { "type": "number" },
+        "paymentStatus": { "type": "string", "enum": ["UNPAID", "PENDING_STK", "PAID", "FAILED", "REFUNDED"] },
+        "deliveryStatus": {
+          "type": "string",
+          "enum": [
+            "PENDING_DISPATCH",
+            "ASSIGNED",
+            "ACCEPTED",
+            "ARRIVED_AT_PICKUP",
+            "PICKED_UP",
+            "IN_TRANSIT",
+            "ARRIVED_AT_DESTINATION",
+            "DELIVERED",
+            "CANCELLED",
+            "FAILED",
+            "RETURN_REQUIRED",
+            "RETURNED"
+          ]
+        },
+        "customerTrackingTokenHash": { "type": "string", "maxLength": 128 },
+        "pickupPinHash": { "type": "string", "maxLength": 128 },
+        "deliveryPinHash": { "type": "string", "maxLength": 128 },
+        "pickupPinProofHash": { "type": "string", "maxLength": 128 },
+        "deliveryPinProofHash": { "type": "string", "maxLength": 128 },
+        "pickupPhotoRef": { "type": "string", "maxLength": 256 },
+        "cancellationReason": { "type": "string", "maxLength": 240 },
+        "zoneId": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "assignedAt": { "type": "string", "format": "date-time" },
+        "pickedUpAt": { "type": "string", "format": "date-time" },
+        "completedAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "jobId",
+        "referenceCode",
+        "shopId",
+        "shopOwnerUid",
+        "shopName",
+        "customerName",
+        "customerPhone",
+        "pickupAddress",
+        "pickupCoordinates",
+        "deliveryAddress",
+        "deliveryCoordinates",
+        "packageCategory",
+        "packageSize",
+        "roadDistanceKm",
+        "estimatedDuration",
+        "deliveryFee",
+        "riderEarning",
+        "platformRevenue",
+        "paymentStatus",
+        "deliveryStatus",
+        "customerTrackingTokenHash",
+        "pickupPinHash",
+        "deliveryPinHash",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "TrackingLink": {
+      "title": "TrackingLink",
+      "description": "Minimized, token-hashed public tracking view for customers.",
+      "type": "object",
+      "properties": {
+        "tokenHash": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "jobId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "shopOwnerUid": { "type": "string", "maxLength": 128 },
+        "riderUid": { "type": "string", "maxLength": 128 },
+        "shopName": { "type": "string", "maxLength": 120 },
+        "referenceCode": { "type": "string", "maxLength": 32 },
+        "deliveryStatus": { "type": "string", "maxLength": 40 },
+        "pickupAddress": { "type": "string", "maxLength": 240 },
+        "pickupCoordinates": { "type": "object" },
+        "deliveryAddress": { "type": "string", "maxLength": 240 },
+        "deliveryCoordinates": { "type": "object" },
+        "riderName": { "type": "string", "maxLength": 120 },
+        "riderPhone": { "type": "string", "maxLength": 24 },
+        "riderLocation": { "type": "object" },
+        "roadDistanceKm": { "type": "number" },
+        "estimatedDuration": { "type": "number" },
+        "active": { "type": "boolean" },
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "tokenHash",
+        "jobId",
+        "shopOwnerUid",
+        "shopName",
+        "referenceCode",
+        "deliveryStatus",
+        "pickupAddress",
+        "pickupCoordinates",
+        "deliveryAddress",
+        "deliveryCoordinates",
+        "roadDistanceKm",
+        "estimatedDuration",
+        "active",
+        "expiresAt",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "JobEvent": {
+      "title": "JobEvent",
+      "description": "Immutable status and location audit trail event for a delivery job.",
+      "type": "object",
+      "properties": {
+        "eventId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "jobId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "shopOwnerUid": { "type": "string", "maxLength": 128 },
+        "riderUid": { "type": "string", "maxLength": 128 },
+        "eventType": { "type": "string", "maxLength": 64 },
+        "actorUid": { "type": "string", "maxLength": 128 },
+        "location": { "type": "object" },
+        "notes": { "type": "string", "maxLength": 400 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["eventId", "jobId", "shopOwnerUid", "eventType", "actorUid", "createdAt"]
+    },
+    "Payment": {
+      "title": "Payment",
+      "description": "Safaricom Daraja M-Pesa STK Push and reconciliation record.",
+      "type": "object",
+      "properties": {
+        "paymentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "jobId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "shopId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "shopOwnerUid": { "type": "string", "maxLength": 128 },
+        "amount": { "type": "number" },
+        "provider": { "type": "string", "enum": ["MPESA_DARAJA_SANDBOX", "MPESA_DARAJA_PROD"] },
+        "phoneNumber": { "type": "string", "maxLength": 24 },
+        "checkoutRequestId": { "type": "string", "maxLength": 128 },
+        "merchantRequestId": { "type": "string", "maxLength": 128 },
+        "mpesaReceiptNumber": { "type": "string", "maxLength": 64 },
+        "paymentStatus": { "type": "string", "enum": ["INITIATED", "PENDING_STK", "AWAITING_CONFIG", "PAID", "FAILED", "CANCELLED", "TIMEOUT", "REFUNDED"] },
+        "failureReason": { "type": "string", "maxLength": 240 },
+        "paidAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["paymentId", "jobId", "shopId", "shopOwnerUid", "amount", "provider", "paymentStatus", "createdAt", "updatedAt"]
+    },
+    "RiderSettlement": {
+      "title": "RiderSettlement",
+      "description": "Rider earnings settlement record per completed job.",
+      "type": "object",
+      "properties": {
+        "settlementId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "riderId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "riderUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "jobId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "grossDeliveryFee": { "type": "number" },
+        "riderEarning": { "type": "number" },
+        "settlementStatus": { "type": "string", "enum": ["PENDING", "PROCESSING", "SETTLED"] },
+        "payoutReference": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "settledAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["settlementId", "riderId", "riderUid", "jobId", "grossDeliveryFee", "riderEarning", "settlementStatus", "createdAt"]
+    },
+    "PricingRule": {
+      "title": "PricingRule",
+      "description": "Distance-band and zone commission pricing rule.",
+      "type": "object",
+      "properties": {
+        "ruleId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "zoneId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "zoneName": { "type": "string", "maxLength": 120 },
+        "minimumDistance": { "type": "number" },
+        "maximumDistance": { "type": "number" },
+        "baseFee": { "type": "number" },
+        "perKmFee": { "type": "number" },
+        "deliveryFee": { "type": "number" },
+        "riderPercentage": { "type": "number" },
+        "platformPercentage": { "type": "number" },
+        "fragileSurcharge": { "type": "number" },
+        "active": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ruleId", "zoneId", "minimumDistance", "maximumDistance", "deliveryFee", "riderPercentage", "platformPercentage", "active", "updatedAt"]
+    },
+    "ServiceZone": {
+      "title": "ServiceZone",
+      "description": "Supported Nairobi delivery operating zone.",
+      "type": "object",
+      "properties": {
+        "zoneId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "zoneName": { "type": "string", "maxLength": 120 },
+        "center": { "type": "object" },
+        "radiusKm": { "type": "number" },
+        "coverageBoundary": { "type": "object" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["zoneId", "zoneName", "coverageBoundary", "active", "createdAt"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "In-app and push notification record.",
+      "type": "object",
+      "properties": {
+        "notificationId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "recipientUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "maxLength": 140 },
+        "message": { "type": "string", "maxLength": 500 },
+        "type": { "type": "string", "maxLength": 48 },
+        "jobId": { "type": "string", "maxLength": 128 },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["notificationId", "recipientUid", "title", "message", "type", "read", "createdAt"]
+    },
+    "SupportTicket": {
+      "title": "SupportTicket",
+      "description": "Merchant or rider issue escalation ticket.",
+      "type": "object",
+      "properties": {
+        "ticketId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdBy": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "creatorRole": { "type": "string", "enum": ["MERCHANT", "RIDER", "ADMIN", "DISPATCHER", "SUPER_ADMIN"] },
+        "jobId": { "type": "string", "maxLength": 128 },
+        "issueType": { "type": "string", "maxLength": 80 },
+        "description": { "type": "string", "maxLength": 1000 },
+        "status": { "type": "string", "enum": ["OPEN", "IN_REVIEW", "RESOLVED", "CLOSED"] },
+        "resolutionNotes": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "resolvedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ticketId", "createdBy", "issueType", "description", "status", "createdAt"]
+    },
+    "ActivityLog": {
+      "title": "ActivityLog",
+      "description": "Immutable operational audit log.",
+      "type": "object",
+      "properties": {
+        "logId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "action": { "type": "string", "maxLength": 120 },
+        "targetType": { "type": "string", "maxLength": 64 },
+        "targetId": { "type": "string", "maxLength": 128 },
+        "details": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["logId", "actorUid", "action", "targetType", "targetId", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Authenticated user profile with PII isolation."
+    },
+    "/admins/{uid}": {
+      "schema": { "$ref": "#/entities/AdminRole" },
+      "description": "Authoritative admin and dispatcher role directory."
+    },
+    "/shops/{shopId}": {
+      "schema": { "$ref": "#/entities/Shop" },
+      "description": "Registered merchant shops."
+    },
+    "/riders/{riderId}": {
+      "schema": { "$ref": "#/entities/Rider" },
+      "description": "Registered boda boda riders and live GPS coordinates."
+    },
+    "/riders/{riderId}/verificationDocs/{docKey}": {
+      "schema": { "$ref": "#/entities/RiderVerificationDoc" },
+      "description": "PII-isolated compliance documents (National ID, NTSA Licence, Insurance) for admin inspection."
+    },
+    "/deliveryJobs/{jobId}": {
+      "schema": { "$ref": "#/entities/DeliveryJob" },
+      "description": "Delivery orders, fee splits, PIN hashes, and lifecycle state."
+    },
+    "/deliveryJobs/{jobId}/evidence/{evidenceId}": {
+      "schema": { "$ref": "#/entities/DeliveryEvidence" },
+      "description": "Parcel pickup evidence photos."
+    },
+    "/trackingLinks/{tokenHash}": {
+      "schema": { "$ref": "#/entities/TrackingLink" },
+      "description": "Public token-hashed tracking projection (get-only, non-enumerable)."
+    },
+    "/jobEvents/{eventId}": {
+      "schema": { "$ref": "#/entities/JobEvent" },
+      "description": "Delivery lifecycle audit events."
+    },
+    "/payments/{paymentId}": {
+      "schema": { "$ref": "#/entities/Payment" },
+      "description": "Daraja M-Pesa payment records."
+    },
+    "/riderSettlements/{settlementId}": {
+      "schema": { "$ref": "#/entities/RiderSettlement" },
+      "description": "Rider payout settlements per completed delivery."
+    },
+    "/pricingRules/{ruleId}": {
+      "schema": { "$ref": "#/entities/PricingRule" },
+      "description": "Westlands and Nairobi delivery fee & commission tiers."
+    },
+    "/serviceZones/{zoneId}": {
+      "schema": { "$ref": "#/entities/ServiceZone" },
+      "description": "Operating delivery zones."
+    },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/Notification" },
+      "description": "User-scoped notifications."
+    },
+    "/supportTickets/{ticketId}": {
+      "schema": { "$ref": "#/entities/SupportTicket" },
+      "description": "Merchant and rider support tickets."
+    },
+    "/activityLogs/{logId}": {
+      "schema": { "$ref": "#/entities/ActivityLog" },
+      "description": "Immutable audit trail."
+    }
+  }
+}

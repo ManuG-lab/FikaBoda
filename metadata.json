@@ -1,0 +1,6 @@
+{
+  "name": "FikaBoda",
+  "description": "Hyperlocal Boda Boda Delivery Management Platform for Nairobi independent shops, riders, and dispatchers.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,34 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrappedAdmin() {
+      return isSignedIn() && request.auth.token.email == 'gmannu2055@gmail.com';
+    }
+
+    // Rider verification documents (National ID, Driving Licence, Insurance)
+    // Stored privately; never publicly readable. Only owner or verified admin can read.
+    match /rider-docs/{riderUid}/{fileName} {
+      allow read: if isSignedIn() && (request.auth.uid == riderUid || isBootstrappedAdmin());
+      allow write: if isSignedIn() && request.auth.uid == riderUid &&
+        request.resource.size <= 5 * 1024 * 1024 &&
+        request.resource.contentType.matches('image/.*|application/pdf');
+    }
+
+    // Delivery pickup/POD photo evidence
+    match /delivery-evidence/{jobId}/{fileName} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() &&
+        request.resource.size <= 5 * 1024 * 1024 &&
+        request.resource.contentType.matches('image/.*');
+    }
+  }
+}

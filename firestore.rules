@@ -1,0 +1,893 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Hardened Global Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function isBootstrappedSuperAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 'gmannu2055@gmail.com';
+    }
+
+    function hasAdminDoc(uid) {
+      return exists(/databases/$(database)/documents/admins/$(uid));
+    }
+
+    function getAdminDoc(uid) {
+      return get(/databases/$(database)/documents/admins/$(uid)).data;
+    }
+
+    function isSuperAdmin() {
+      return isBootstrappedSuperAdmin() || (
+        isVerifiedUser() &&
+        hasAdminDoc(request.auth.uid) &&
+        getAdminDoc(request.auth.uid).active == true &&
+        getAdminDoc(request.auth.uid).role == 'SUPER_ADMIN'
+      );
+    }
+
+    function isAdmin() {
+      return isBootstrappedSuperAdmin() || (
+        isVerifiedUser() &&
+        hasAdminDoc(request.auth.uid) &&
+        getAdminDoc(request.auth.uid).active == true &&
+        getAdminDoc(request.auth.uid).role in ['SUPER_ADMIN', 'ADMIN']
+      );
+    }
+
+    function isDispatcherOrAdmin() {
+      return isBootstrappedSuperAdmin() || (
+        isVerifiedUser() &&
+        hasAdminDoc(request.auth.uid) &&
+        getAdminDoc(request.auth.uid).active == true &&
+        getAdminDoc(request.auth.uid).role in ['SUPER_ADMIN', 'ADMIN', 'DISPATCHER']
+      );
+    }
+
+    function isLatLng(obj) {
+      return obj is map &&
+        obj.keys().hasAll(['lat', 'lng']) &&
+        obj.keys().hasOnly(['lat', 'lng']) &&
+        obj.lat is number && obj.lat >= -90 && obj.lat <= 90 &&
+        obj.lng is number && obj.lng >= -180 && obj.lng <= 180;
+    }
+
+    // 3. Entity Validation Blueprints (Anti-Update-Gap: Never use existing() or diff() inside)
+    function isValidUserProfile(data, uid) {
+      return data.keys().hasAll(['uid', 'fullName', 'email', 'phoneNumber', 'role', 'accountStatus', 'createdAt', 'lastLogin']) &&
+        data.keys().hasOnly(['uid', 'fullName', 'email', 'phoneNumber', 'role', 'accountStatus', 'profilePhoto', 'fcmToken', 'createdAt', 'lastLogin']) &&
+        data.uid == uid &&
+        data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 120 &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 200 &&
+        data.phoneNumber is string && data.phoneNumber.size() >= 0 && data.phoneNumber.size() <= 24 &&
+        data.role in ['SUPER_ADMIN', 'ADMIN', 'DISPATCHER', 'MERCHANT', 'RIDER'] &&
+        data.accountStatus in ['PENDING', 'ACTIVE', 'SUSPENDED', 'REJECTED'] &&
+        (!data.keys().hasAny(['profilePhoto']) || (data.profilePhoto is string && data.profilePhoto.size() <= 512)) &&
+        (!data.keys().hasAny(['fcmToken']) || (data.fcmToken is string && data.fcmToken.size() <= 512)) &&
+        data.createdAt is timestamp &&
+        data.lastLogin is timestamp;
+    }
+
+    function isValidAdminRole(data, uid) {
+      return data.keys().hasAll(['uid', 'email', 'role', 'assignedBy', 'active', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'role', 'assignedBy', 'active', 'createdAt']) &&
+        data.uid == uid &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 200 &&
+        data.role in ['SUPER_ADMIN', 'ADMIN', 'DISPATCHER'] &&
+        isValidId(data.assignedBy) &&
+        data.active is bool &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidShop(data, shopId) {
+      return data.keys().hasAll([
+          'shopId', 'ownerUid', 'shopName', 'businessCategory', 'contactPerson',
+          'phoneNumber', 'email', 'physicalAddress', 'location', 'operatingHours',
+          'verificationStatus', 'status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'shopId', 'ownerUid', 'shopName', 'businessCategory', 'contactPerson',
+          'phoneNumber', 'email', 'physicalAddress', 'location', 'operatingHours',
+          'verificationStatus', 'status', 'zoneId', 'createdAt', 'updatedAt'
+        ]) &&
+        data.shopId == shopId &&
+        isValidId(data.ownerUid) &&
+        data.shopName is string && data.shopName.size() >= 2 && data.shopName.size() <= 120 &&
+        data.businessCategory is string && data.businessCategory.size() >= 2 && data.businessCategory.size() <= 80 &&
+        data.contactPerson is string && data.contactPerson.size() >= 2 && data.contactPerson.size() <= 120 &&
+        data.phoneNumber is string && data.phoneNumber.size() >= 7 && data.phoneNumber.size() <= 24 &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 200 &&
+        data.physicalAddress is string && data.physicalAddress.size() >= 3 && data.physicalAddress.size() <= 240 &&
+        isLatLng(data.location) &&
+        data.operatingHours is string && data.operatingHours.size() >= 2 && data.operatingHours.size() <= 120 &&
+        data.verificationStatus in ['PENDING', 'VERIFIED', 'REJECTED'] &&
+        data.status in ['PENDING_APPROVAL', 'ACTIVE', 'SUSPENDED'] &&
+        (!data.keys().hasAny(['zoneId']) || isValidId(data.zoneId)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidRider(data, riderId) {
+      return data.keys().hasAll([
+          'riderId', 'uid', 'fullName', 'phoneNumber', 'email', 'nationalIdReference',
+          'motorcycleRegistration', 'licenceVerificationStatus', 'insuranceVerificationStatus',
+          'approvalStatus', 'availabilityStatus', 'rating', 'totalDeliveries', 'totalEarnings',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'riderId', 'uid', 'fullName', 'phoneNumber', 'email', 'nationalIdReference',
+          'drivingLicenceRef', 'motorcycleRegistration', 'insuranceDetails', 'emergencyContact',
+          'verificationDocRefs', 'licenceVerificationStatus', 'insuranceVerificationStatus',
+          'approvalStatus', 'availabilityStatus', 'currentLocation', 'lastLocationUpdate',
+          'rating', 'totalDeliveries', 'totalEarnings', 'createdAt', 'updatedAt'
+        ]) &&
+        data.riderId == riderId &&
+        data.uid == riderId &&
+        data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 120 &&
+        data.phoneNumber is string && data.phoneNumber.size() >= 7 && data.phoneNumber.size() <= 24 &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 200 &&
+        data.nationalIdReference is string && data.nationalIdReference.size() >= 4 && data.nationalIdReference.size() <= 64 &&
+        (!data.keys().hasAny(['drivingLicenceRef']) || (data.drivingLicenceRef is string && data.drivingLicenceRef.size() <= 80)) &&
+        data.motorcycleRegistration is string && data.motorcycleRegistration.size() >= 4 && data.motorcycleRegistration.size() <= 32 &&
+        (!data.keys().hasAny(['insuranceDetails']) || (data.insuranceDetails is string && data.insuranceDetails.size() <= 120)) &&
+        (!data.keys().hasAny(['emergencyContact']) || (data.emergencyContact is string && data.emergencyContact.size() <= 120)) &&
+        (!data.keys().hasAny(['verificationDocRefs']) || data.verificationDocRefs is map) &&
+        data.licenceVerificationStatus in ['PENDING', 'VERIFIED', 'REJECTED'] &&
+        data.insuranceVerificationStatus in ['PENDING', 'VERIFIED', 'REJECTED'] &&
+        data.approvalStatus in ['PENDING', 'APPROVED', 'SUSPENDED', 'REJECTED'] &&
+        data.availabilityStatus in ['ONLINE', 'OFFLINE', 'ON_DELIVERY'] &&
+        (!data.keys().hasAny(['currentLocation']) || isLatLng(data.currentLocation)) &&
+        (!data.keys().hasAny(['lastLocationUpdate']) || data.lastLocationUpdate is timestamp) &&
+        data.rating is number && data.rating >= 0 && data.rating <= 5 &&
+        data.totalDeliveries is number && data.totalDeliveries >= 0 &&
+        data.totalEarnings is number && data.totalEarnings >= 0 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidVerificationDoc(data, docKey, riderId) {
+      return data.keys().hasAll([
+          'docKey', 'riderId', 'uid', 'fileName', 'mimeType', 'byteSize',
+          'verificationStatus', 'uploadedAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'docKey', 'riderId', 'uid', 'fileName', 'mimeType', 'byteSize',
+          'dataUrl', 'storagePath', 'verificationStatus', 'reviewedBy', 'reviewNotes',
+          'uploadedAt', 'updatedAt'
+        ]) &&
+        data.docKey == docKey &&
+        docKey in ['nationalId', 'drivingLicence', 'insurance'] &&
+        data.riderId == riderId &&
+        data.uid == riderId &&
+        data.fileName is string && data.fileName.size() >= 1 && data.fileName.size() <= 160 &&
+        data.mimeType in ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'] &&
+        data.byteSize is number && data.byteSize > 0 && data.byteSize <= 700000 &&
+        (!data.keys().hasAny(['dataUrl']) || (data.dataUrl is string && data.dataUrl.size() <= 960000)) &&
+        (!data.keys().hasAny(['storagePath']) || (data.storagePath is string && data.storagePath.size() <= 300)) &&
+        data.verificationStatus in ['PENDING', 'VERIFIED', 'REJECTED'] &&
+        (!data.keys().hasAny(['reviewedBy']) || isValidId(data.reviewedBy)) &&
+        (!data.keys().hasAny(['reviewNotes']) || (data.reviewNotes is string && data.reviewNotes.size() <= 300)) &&
+        data.uploadedAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidDeliveryEvidence(data, evidenceId, jobId) {
+      return data.keys().hasAll([
+          'evidenceId', 'jobId', 'shopOwnerUid', 'riderUid', 'evidenceType',
+          'fileName', 'mimeType', 'byteSize', 'dataUrl', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'evidenceId', 'jobId', 'shopOwnerUid', 'riderUid', 'evidenceType',
+          'fileName', 'mimeType', 'byteSize', 'dataUrl', 'createdAt'
+        ]) &&
+        data.evidenceId == evidenceId &&
+        data.jobId == jobId &&
+        isValidId(data.shopOwnerUid) &&
+        isValidId(data.riderUid) &&
+        data.evidenceType in ['PICKUP_PHOTO'] &&
+        data.fileName is string && data.fileName.size() >= 1 && data.fileName.size() <= 160 &&
+        data.mimeType in ['image/jpeg', 'image/png', 'image/webp'] &&
+        data.byteSize is number && data.byteSize > 0 && data.byteSize <= 700000 &&
+        data.dataUrl is string && data.dataUrl.size() <= 960000 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidDeliveryJob(data, jobId) {
+      return data.keys().hasAll([
+          'jobId', 'referenceCode', 'shopId', 'shopOwnerUid', 'shopName',
+          'customerName', 'customerPhone', 'pickupAddress', 'pickupCoordinates',
+          'deliveryAddress', 'deliveryCoordinates', 'packageCategory', 'packageSize',
+          'roadDistanceKm', 'estimatedDuration', 'deliveryFee', 'riderEarning',
+          'platformRevenue', 'paymentStatus', 'deliveryStatus',
+          'customerTrackingTokenHash', 'pickupPinHash', 'deliveryPinHash',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'jobId', 'referenceCode', 'shopId', 'shopOwnerUid', 'shopName',
+          'riderId', 'riderUid', 'riderName', 'riderPhone',
+          'customerName', 'customerPhone', 'pickupAddress', 'pickupCoordinates',
+          'pickupInstructions', 'deliveryAddress', 'deliveryCoordinates', 'deliveryInstructions',
+          'packageCategory', 'packageDescription', 'packageSize', 'specialHandling',
+          'roadDistanceKm', 'estimatedDuration', 'deliveryFee', 'riderEarning',
+          'platformRevenue', 'paymentStatus', 'deliveryStatus',
+          'customerTrackingTokenHash', 'pickupPinHash', 'deliveryPinHash',
+          'pickupPinProofHash', 'deliveryPinProofHash', 'pickupPhotoRef',
+          'cancellationReason', 'zoneId', 'createdAt', 'assignedAt', 'pickedUpAt',
+          'completedAt', 'updatedAt'
+        ]) &&
+        data.jobId == jobId &&
+        data.referenceCode is string && data.referenceCode.size() >= 4 && data.referenceCode.size() <= 32 &&
+        isValidId(data.shopId) &&
+        isValidId(data.shopOwnerUid) &&
+        data.shopName is string && data.shopName.size() >= 2 && data.shopName.size() <= 120 &&
+        (!data.keys().hasAny(['riderId']) || data.riderId == null || isValidId(data.riderId)) &&
+        (!data.keys().hasAny(['riderUid']) || data.riderUid == null || isValidId(data.riderUid)) &&
+        (!data.keys().hasAny(['riderName']) || data.riderName == null || (data.riderName is string && data.riderName.size() <= 120)) &&
+        (!data.keys().hasAny(['riderPhone']) || data.riderPhone == null || (data.riderPhone is string && data.riderPhone.size() <= 24)) &&
+        data.customerName is string && data.customerName.size() >= 2 && data.customerName.size() <= 120 &&
+        data.customerPhone is string && data.customerPhone.size() >= 7 && data.customerPhone.size() <= 24 &&
+        data.pickupAddress is string && data.pickupAddress.size() >= 3 && data.pickupAddress.size() <= 240 &&
+        isLatLng(data.pickupCoordinates) &&
+        (!data.keys().hasAny(['pickupInstructions']) || (data.pickupInstructions is string && data.pickupInstructions.size() <= 300)) &&
+        data.deliveryAddress is string && data.deliveryAddress.size() >= 3 && data.deliveryAddress.size() <= 240 &&
+        isLatLng(data.deliveryCoordinates) &&
+        (!data.keys().hasAny(['deliveryInstructions']) || (data.deliveryInstructions is string && data.deliveryInstructions.size() <= 300)) &&
+        data.packageCategory is string && data.packageCategory.size() >= 2 && data.packageCategory.size() <= 64 &&
+        (!data.keys().hasAny(['packageDescription']) || (data.packageDescription is string && data.packageDescription.size() <= 240)) &&
+        data.packageSize in ['SMALL', 'MEDIUM', 'LARGE'] &&
+        (!data.keys().hasAny(['specialHandling']) || (data.specialHandling is string && data.specialHandling.size() <= 160)) &&
+        data.roadDistanceKm is number && data.roadDistanceKm > 0 && data.roadDistanceKm <= 250 &&
+        data.estimatedDuration is number && data.estimatedDuration > 0 && data.estimatedDuration <= 600 &&
+        data.deliveryFee is number && data.deliveryFee >= 50 && data.deliveryFee <= 50000 &&
+        data.riderEarning is number && data.riderEarning >= 0 &&
+        data.platformRevenue is number && data.platformRevenue >= 0 &&
+        (data.riderEarning + data.platformRevenue) == data.deliveryFee &&
+        data.paymentStatus in ['INITIATED', 'UNPAID', 'PENDING_STK', 'AWAITING_CONFIG', 'PAID', 'FAILED', 'REFUNDED'] &&
+        data.deliveryStatus in [
+          'PENDING_DISPATCH', 'ASSIGNED', 'ACCEPTED', 'ARRIVED_AT_PICKUP',
+          'PICKED_UP', 'IN_TRANSIT', 'ARRIVED_AT_DESTINATION', 'DELIVERED',
+          'CANCELLED', 'FAILED', 'RETURN_REQUIRED', 'RETURNED'
+        ] &&
+        isValidId(data.customerTrackingTokenHash) &&
+        isValidId(data.pickupPinHash) &&
+        isValidId(data.deliveryPinHash) &&
+        (!data.keys().hasAny(['pickupPinProofHash']) || isValidId(data.pickupPinProofHash)) &&
+        (!data.keys().hasAny(['deliveryPinProofHash']) || isValidId(data.deliveryPinProofHash)) &&
+        (!data.keys().hasAny(['pickupPhotoRef']) || (data.pickupPhotoRef is string && data.pickupPhotoRef.size() <= 256)) &&
+        (!data.keys().hasAny(['cancellationReason']) || (data.cancellationReason is string && data.cancellationReason.size() <= 240)) &&
+        (!data.keys().hasAny(['zoneId']) || isValidId(data.zoneId)) &&
+        data.createdAt is timestamp &&
+        (!data.keys().hasAny(['assignedAt']) || data.assignedAt is timestamp) &&
+        (!data.keys().hasAny(['pickedUpAt']) || data.pickedUpAt is timestamp) &&
+        (!data.keys().hasAny(['completedAt']) || data.completedAt is timestamp) &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidTrackingLink(data, tokenHash) {
+      return data.keys().hasAll([
+          'tokenHash', 'jobId', 'shopOwnerUid', 'shopName', 'referenceCode',
+          'deliveryStatus', 'pickupAddress', 'pickupCoordinates',
+          'deliveryAddress', 'deliveryCoordinates', 'roadDistanceKm',
+          'estimatedDuration', 'active', 'expiresAt', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'tokenHash', 'jobId', 'shopOwnerUid', 'riderUid', 'shopName', 'referenceCode',
+          'deliveryStatus', 'pickupAddress', 'pickupCoordinates',
+          'deliveryAddress', 'deliveryCoordinates', 'riderName', 'riderPhone',
+          'riderLocation', 'roadDistanceKm', 'estimatedDuration',
+          'active', 'expiresAt', 'createdAt', 'updatedAt'
+        ]) &&
+        data.tokenHash == tokenHash &&
+        isValidId(data.jobId) &&
+        isValidId(data.shopOwnerUid) &&
+        (!data.keys().hasAny(['riderUid']) || data.riderUid == null || isValidId(data.riderUid)) &&
+        data.shopName is string && data.shopName.size() >= 2 && data.shopName.size() <= 120 &&
+        data.referenceCode is string && data.referenceCode.size() >= 4 && data.referenceCode.size() <= 32 &&
+        data.deliveryStatus is string && data.deliveryStatus.size() >= 2 && data.deliveryStatus.size() <= 40 &&
+        data.pickupAddress is string && data.pickupAddress.size() <= 240 &&
+        isLatLng(data.pickupCoordinates) &&
+        data.deliveryAddress is string && data.deliveryAddress.size() <= 240 &&
+        isLatLng(data.deliveryCoordinates) &&
+        (!data.keys().hasAny(['riderName']) || data.riderName == null || (data.riderName is string && data.riderName.size() <= 120)) &&
+        (!data.keys().hasAny(['riderPhone']) || data.riderPhone == null || (data.riderPhone is string && data.riderPhone.size() <= 24)) &&
+        (!data.keys().hasAny(['riderLocation']) || data.riderLocation == null || isLatLng(data.riderLocation)) &&
+        data.roadDistanceKm is number && data.roadDistanceKm > 0 &&
+        data.estimatedDuration is number && data.estimatedDuration > 0 &&
+        data.active is bool &&
+        data.expiresAt is timestamp &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidJobEvent(data, eventId) {
+      return data.keys().hasAll(['eventId', 'jobId', 'shopOwnerUid', 'eventType', 'actorUid', 'createdAt']) &&
+        data.keys().hasOnly(['eventId', 'jobId', 'shopOwnerUid', 'riderUid', 'eventType', 'actorUid', 'location', 'notes', 'createdAt']) &&
+        data.eventId == eventId &&
+        isValidId(data.jobId) &&
+        isValidId(data.shopOwnerUid) &&
+        (!data.keys().hasAny(['riderUid']) || data.riderUid == null || isValidId(data.riderUid)) &&
+        data.eventType is string && data.eventType.size() >= 2 && data.eventType.size() <= 64 &&
+        data.actorUid == request.auth.uid &&
+        (!data.keys().hasAny(['location']) || data.location == null || isLatLng(data.location)) &&
+        (!data.keys().hasAny(['notes']) || (data.notes is string && data.notes.size() <= 400)) &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidPayment(data, paymentId) {
+      return data.keys().hasAll(['paymentId', 'jobId', 'shopId', 'shopOwnerUid', 'amount', 'provider', 'paymentStatus', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'paymentId', 'jobId', 'shopId', 'shopOwnerUid', 'amount', 'provider',
+          'phoneNumber', 'checkoutRequestId', 'merchantRequestId', 'mpesaReceiptNumber',
+          'paymentStatus', 'failureReason', 'paidAt', 'createdAt', 'updatedAt'
+        ]) &&
+        data.paymentId == paymentId &&
+        isValidId(data.jobId) &&
+        isValidId(data.shopId) &&
+        isValidId(data.shopOwnerUid) &&
+        data.amount is number && data.amount >= 50 && data.amount <= 50000 &&
+        data.provider in ['MPESA_DARAJA_SANDBOX', 'MPESA_DARAJA_PROD'] &&
+        (!data.keys().hasAny(['phoneNumber']) || (data.phoneNumber is string && data.phoneNumber.size() <= 24)) &&
+        (!data.keys().hasAny(['checkoutRequestId']) || (data.checkoutRequestId is string && data.checkoutRequestId.size() <= 128)) &&
+        (!data.keys().hasAny(['merchantRequestId']) || (data.merchantRequestId is string && data.merchantRequestId.size() <= 128)) &&
+        (!data.keys().hasAny(['mpesaReceiptNumber']) || (data.mpesaReceiptNumber is string && data.mpesaReceiptNumber.size() <= 64)) &&
+        data.paymentStatus in ['INITIATED', 'PENDING_STK', 'AWAITING_CONFIG', 'PAID', 'FAILED', 'CANCELLED', 'TIMEOUT', 'REFUNDED'] &&
+        (!data.keys().hasAny(['failureReason']) || (data.failureReason is string && data.failureReason.size() <= 240)) &&
+        (!data.keys().hasAny(['paidAt']) || data.paidAt is timestamp) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidSettlement(data, settlementId) {
+      return data.keys().hasAll(['settlementId', 'riderId', 'riderUid', 'jobId', 'grossDeliveryFee', 'riderEarning', 'settlementStatus', 'createdAt']) &&
+        data.keys().hasOnly(['settlementId', 'riderId', 'riderUid', 'jobId', 'grossDeliveryFee', 'riderEarning', 'settlementStatus', 'payoutReference', 'createdAt', 'settledAt']) &&
+        data.settlementId == settlementId &&
+        data.settlementId == data.jobId &&
+        isValidId(data.riderId) &&
+        isValidId(data.riderUid) &&
+        isValidId(data.jobId) &&
+        data.grossDeliveryFee is number && data.grossDeliveryFee >= 50 &&
+        data.riderEarning is number && data.riderEarning >= 0 && data.riderEarning <= data.grossDeliveryFee &&
+        data.settlementStatus in ['PENDING', 'PROCESSING', 'SETTLED'] &&
+        (!data.keys().hasAny(['payoutReference']) || (data.payoutReference is string && data.payoutReference.size() <= 128)) &&
+        data.createdAt is timestamp &&
+        (!data.keys().hasAny(['settledAt']) || data.settledAt is timestamp);
+    }
+
+    function isValidPricingRule(data, ruleId) {
+      return data.keys().hasAll(['ruleId', 'zoneId', 'minimumDistance', 'maximumDistance', 'deliveryFee', 'riderPercentage', 'platformPercentage', 'active', 'updatedAt']) &&
+        data.keys().hasOnly(['ruleId', 'zoneId', 'zoneName', 'minimumDistance', 'maximumDistance', 'baseFee', 'perKmFee', 'deliveryFee', 'riderPercentage', 'platformPercentage', 'fragileSurcharge', 'active', 'updatedAt']) &&
+        data.ruleId == ruleId &&
+        isValidId(data.zoneId) &&
+        (!data.keys().hasAny(['zoneName']) || (data.zoneName is string && data.zoneName.size() <= 120)) &&
+        data.minimumDistance is number && data.minimumDistance >= 0 &&
+        data.maximumDistance is number && data.maximumDistance > data.minimumDistance &&
+        (!data.keys().hasAny(['baseFee']) || (data.baseFee is number && data.baseFee >= 0)) &&
+        (!data.keys().hasAny(['perKmFee']) || (data.perKmFee is number && data.perKmFee >= 0)) &&
+        data.deliveryFee is number && data.deliveryFee >= 50 &&
+        data.riderPercentage is number && data.riderPercentage >= 0 && data.riderPercentage <= 100 &&
+        data.platformPercentage is number && data.platformPercentage >= 0 && data.platformPercentage <= 100 &&
+        (data.riderPercentage + data.platformPercentage) == 100 &&
+        (!data.keys().hasAny(['fragileSurcharge']) || (data.fragileSurcharge is number && data.fragileSurcharge >= 0)) &&
+        data.active is bool &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidServiceZone(data, zoneId) {
+      return data.keys().hasAll(['zoneId', 'zoneName', 'coverageBoundary', 'active', 'createdAt']) &&
+        data.keys().hasOnly(['zoneId', 'zoneName', 'center', 'radiusKm', 'coverageBoundary', 'active', 'createdAt']) &&
+        data.zoneId == zoneId &&
+        data.zoneName is string && data.zoneName.size() >= 2 && data.zoneName.size() <= 120 &&
+        (!data.keys().hasAny(['center']) || isLatLng(data.center)) &&
+        (!data.keys().hasAny(['radiusKm']) || (data.radiusKm is number && data.radiusKm > 0 && data.radiusKm <= 100)) &&
+        data.coverageBoundary is map &&
+        data.active is bool &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidNotification(data, notificationId) {
+      return data.keys().hasAll(['notificationId', 'recipientUid', 'title', 'message', 'type', 'read', 'createdAt']) &&
+        data.keys().hasOnly(['notificationId', 'recipientUid', 'title', 'message', 'type', 'jobId', 'read', 'createdAt']) &&
+        data.notificationId == notificationId &&
+        isValidId(data.recipientUid) &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 140 &&
+        data.message is string && data.message.size() >= 1 && data.message.size() <= 500 &&
+        data.type is string && data.type.size() >= 2 && data.type.size() <= 48 &&
+        (!data.keys().hasAny(['jobId']) || isValidId(data.jobId)) &&
+        data.read is bool &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidSupportTicket(data, ticketId) {
+      return data.keys().hasAll(['ticketId', 'createdBy', 'issueType', 'description', 'status', 'createdAt']) &&
+        data.keys().hasOnly(['ticketId', 'createdBy', 'creatorRole', 'jobId', 'issueType', 'description', 'status', 'resolutionNotes', 'createdAt', 'resolvedAt']) &&
+        data.ticketId == ticketId &&
+        isValidId(data.createdBy) &&
+        (!data.keys().hasAny(['creatorRole']) || data.creatorRole in ['MERCHANT', 'RIDER', 'ADMIN', 'DISPATCHER', 'SUPER_ADMIN']) &&
+        (!data.keys().hasAny(['jobId']) || data.jobId == '' || isValidId(data.jobId)) &&
+        data.issueType is string && data.issueType.size() >= 2 && data.issueType.size() <= 80 &&
+        data.description is string && data.description.size() >= 5 && data.description.size() <= 1000 &&
+        data.status in ['OPEN', 'IN_REVIEW', 'RESOLVED', 'CLOSED'] &&
+        (!data.keys().hasAny(['resolutionNotes']) || (data.resolutionNotes is string && data.resolutionNotes.size() <= 500)) &&
+        data.createdAt is timestamp &&
+        (!data.keys().hasAny(['resolvedAt']) || data.resolvedAt is timestamp);
+    }
+
+    function isValidActivityLog(data, logId) {
+      return data.keys().hasAll(['logId', 'actorUid', 'action', 'targetType', 'targetId', 'createdAt']) &&
+        data.keys().hasOnly(['logId', 'actorUid', 'action', 'targetType', 'targetId', 'details', 'createdAt']) &&
+        data.logId == logId &&
+        data.actorUid == request.auth.uid &&
+        data.action is string && data.action.size() >= 2 && data.action.size() <= 120 &&
+        data.targetType is string && data.targetType.size() >= 2 && data.targetType.size() <= 64 &&
+        data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 128 &&
+        (!data.keys().hasAny(['details']) || (data.details is string && data.details.size() <= 500)) &&
+        data.createdAt is timestamp;
+    }
+
+    // 4. Collection Rules
+
+    // /users/{uid} — Strict PII Isolation, No Self-Privilege Escalation
+    match /users/{uid} {
+      allow get: if isValidId(uid) && (isOwner(uid) || isDispatcherOrAdmin());
+      allow list: if isSignedIn() && (resource.data.uid == request.auth.uid || isDispatcherOrAdmin());
+      allow create: if isSignedIn() && isValidId(uid) && isOwner(uid) &&
+        isValidUserProfile(incoming(), uid) &&
+        incoming().createdAt == request.time &&
+        incoming().lastLogin == request.time &&
+        (
+          (isBootstrappedSuperAdmin() && incoming().role == 'SUPER_ADMIN' && incoming().accountStatus == 'ACTIVE') ||
+          (incoming().role in ['MERCHANT', 'RIDER'] && incoming().accountStatus == 'PENDING')
+        );
+      allow update: if isSignedIn() && isValidId(uid) && isValidUserProfile(incoming(), uid) && (
+        (isAdmin() && !(existing().role == 'SUPER_ADMIN' && !isSuperAdmin())) ||
+        (isOwner(uid) &&
+          incoming().uid == existing().uid &&
+          incoming().role == existing().role &&
+          incoming().accountStatus == existing().accountStatus &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().lastLogin == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'phoneNumber', 'profilePhoto', 'fcmToken', 'lastLogin'])
+        )
+      );
+      allow delete: if isSuperAdmin() && isValidId(uid);
+    }
+
+    // /admins/{uid} — Role Registry (Only Super Admin can assign/revoke)
+    match /admins/{uid} {
+      allow get: if isSignedIn() && isValidId(uid) && (isOwner(uid) || isAdmin());
+      allow list: if isSignedIn() && (resource.data.uid == request.auth.uid || isAdmin());
+      allow create: if isValidId(uid) && isValidAdminRole(incoming(), uid) &&
+        incoming().createdAt == request.time &&
+        (isSuperAdmin() || (isBootstrappedSuperAdmin() && isOwner(uid) && incoming().role == 'SUPER_ADMIN'));
+      allow update: if isSuperAdmin() && isValidId(uid) && isValidAdminRole(incoming(), uid) &&
+        incoming().createdAt == existing().createdAt;
+      allow delete: if isSuperAdmin() && isValidId(uid) && uid != request.auth.uid;
+    }
+
+    // /shops/{shopId} — Merchant Shops
+    match /shops/{shopId} {
+      allow get: if isSignedIn() && isValidId(shopId) && (
+        (resource == null && shopId == ('shop_' + request.auth.uid)) ||
+        (resource != null && existing().ownerUid == request.auth.uid) ||
+        isDispatcherOrAdmin()
+      );
+      allow list: if isSignedIn() && (
+        resource.data.ownerUid == request.auth.uid || isDispatcherOrAdmin()
+      );
+      allow create: if isVerifiedUser() && isValidId(shopId) &&
+        isValidShop(incoming(), shopId) &&
+        incoming().ownerUid == request.auth.uid &&
+        incoming().verificationStatus == 'PENDING' &&
+        incoming().status == 'PENDING_APPROVAL' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser() && isValidId(shopId) && isValidShop(incoming(), shopId) && (
+        (isAdmin() && incoming().ownerUid == existing().ownerUid && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time) ||
+        (existing().ownerUid == request.auth.uid &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().shopId == existing().shopId &&
+          incoming().verificationStatus == existing().verificationStatus &&
+          incoming().status == existing().status &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'shopName', 'businessCategory', 'contactPerson', 'phoneNumber',
+            'physicalAddress', 'location', 'operatingHours', 'updatedAt'
+          ])
+        )
+      );
+      allow delete: if isSuperAdmin() && isValidId(shopId);
+    }
+
+    // /riders/{riderId} — Rider Profiles & Live GPS
+    match /riders/{riderId} {
+      allow get: if isSignedIn() && isValidId(riderId) && (
+        isOwner(riderId) ||
+        (resource != null && existing().uid == request.auth.uid) ||
+        isDispatcherOrAdmin()
+      );
+      allow list: if isSignedIn() && (
+        resource.data.uid == request.auth.uid || isDispatcherOrAdmin()
+      );
+      allow create: if isVerifiedUser() && isValidId(riderId) &&
+        isValidRider(incoming(), riderId) &&
+        incoming().uid == request.auth.uid &&
+        incoming().licenceVerificationStatus == 'PENDING' &&
+        incoming().insuranceVerificationStatus == 'PENDING' &&
+        incoming().approvalStatus == 'PENDING' &&
+        incoming().availabilityStatus == 'OFFLINE' &&
+        incoming().totalDeliveries == 0 &&
+        incoming().totalEarnings == 0 &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser() && isValidId(riderId) && isValidRider(incoming(), riderId) && (
+        (isAdmin() && incoming().uid == existing().uid && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time) ||
+        (existing().uid == request.auth.uid &&
+          incoming().uid == existing().uid &&
+          incoming().approvalStatus == existing().approvalStatus &&
+          incoming().licenceVerificationStatus == existing().licenceVerificationStatus &&
+          incoming().insuranceVerificationStatus == existing().insuranceVerificationStatus &&
+          incoming().totalDeliveries == existing().totalDeliveries &&
+          incoming().totalEarnings == existing().totalEarnings &&
+          incoming().rating == existing().rating &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          (
+            (existing().approvalStatus == 'APPROVED' &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['availabilityStatus', 'currentLocation', 'lastLocationUpdate', 'updatedAt'])) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['phoneNumber', 'motorcycleRegistration', 'emergencyContact', 'insuranceDetails', 'drivingLicenceRef', 'verificationDocRefs', 'updatedAt'])
+          )
+        )
+      );
+      allow delete: if isSuperAdmin() && isValidId(riderId);
+
+      // /riders/{riderId}/verificationDocs/{docKey} — PII-isolated Compliance Docs
+      match /verificationDocs/{docKey} {
+        allow get, list: if isSignedIn() && isValidId(riderId) && (isOwner(riderId) || isAdmin());
+        allow create: if isVerifiedUser() && isValidId(riderId) && isOwner(riderId) &&
+          isValidVerificationDoc(incoming(), docKey, riderId) &&
+          incoming().verificationStatus == 'PENDING' &&
+          incoming().uploadedAt == request.time &&
+          incoming().updatedAt == request.time;
+        allow update: if isVerifiedUser() && isValidId(riderId) &&
+          isValidVerificationDoc(incoming(), docKey, riderId) &&
+          incoming().uid == existing().uid &&
+          incoming().riderId == existing().riderId &&
+          incoming().uploadedAt == existing().uploadedAt &&
+          incoming().updatedAt == request.time &&
+          (
+            (isAdmin()) ||
+            (isOwner(riderId) &&
+              incoming().verificationStatus == 'PENDING' &&
+              !incoming().keys().hasAny(['reviewedBy', 'reviewNotes'])
+            )
+          );
+        allow delete: if isSuperAdmin() && isValidId(riderId);
+      }
+    }
+
+    // /deliveryJobs/{jobId} — Core Dispatch & Lifecycle
+    match /deliveryJobs/{jobId} {
+      allow get: if isSignedIn() && isValidId(jobId) && (
+        (resource != null && (
+          existing().shopOwnerUid == request.auth.uid ||
+          (existing().keys().hasAny(['riderUid']) && existing().riderUid == request.auth.uid) ||
+          existing().deliveryStatus == 'PENDING_DISPATCH'
+        )) ||
+        isDispatcherOrAdmin()
+      );
+      allow list: if isSignedIn() && (
+        resource.data.shopOwnerUid == request.auth.uid ||
+        resource.data.riderUid == request.auth.uid ||
+        resource.data.deliveryStatus == 'PENDING_DISPATCH' ||
+        isDispatcherOrAdmin()
+      );
+      allow create: if isVerifiedUser() && isValidId(jobId) &&
+        isValidDeliveryJob(incoming(), jobId) &&
+        incoming().shopOwnerUid == request.auth.uid &&
+        incoming().deliveryStatus == 'PENDING_DISPATCH' &&
+        incoming().paymentStatus in ['UNPAID', 'PENDING_STK'] &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/shops/$(incoming().shopId)) &&
+        get(/databases/$(database)/documents/shops/$(incoming().shopId)).data.ownerUid == request.auth.uid &&
+        get(/databases/$(database)/documents/shops/$(incoming().shopId)).data.status == 'ACTIVE' &&
+        existsAfter(/databases/$(database)/documents/trackingLinks/$(incoming().customerTrackingTokenHash));
+      allow update: if isVerifiedUser() && isValidId(jobId) && isValidDeliveryJob(incoming(), jobId) &&
+        incoming().jobId == existing().jobId &&
+        incoming().shopId == existing().shopId &&
+        incoming().shopOwnerUid == existing().shopOwnerUid &&
+        incoming().deliveryFee == existing().deliveryFee &&
+        incoming().riderEarning == existing().riderEarning &&
+        incoming().platformRevenue == existing().platformRevenue &&
+        incoming().pickupPinHash == existing().pickupPinHash &&
+        incoming().deliveryPinHash == existing().deliveryPinHash &&
+        incoming().customerTrackingTokenHash == existing().customerTrackingTokenHash &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          isDispatcherOrAdmin() ||
+          (
+            !(existing().deliveryStatus in ['DELIVERED', 'CANCELLED', 'RETURNED']) && (
+              (existing().shopOwnerUid == request.auth.uid &&
+                existing().deliveryStatus in ['PENDING_DISPATCH', 'ASSIGNED', 'ACCEPTED'] &&
+                incoming().deliveryStatus == 'CANCELLED' &&
+                incoming().diff(existing()).affectedKeys().hasOnly(['deliveryStatus', 'cancellationReason', 'updatedAt'])
+              ) ||
+              (existing().shopOwnerUid == request.auth.uid &&
+                incoming().paymentStatus == 'PENDING_STK' &&
+                incoming().diff(existing()).affectedKeys().hasOnly(['paymentStatus', 'updatedAt'])
+              ) ||
+              ((!existing().keys().hasAny(['riderUid']) || existing().riderUid == null || existing().riderUid == '') &&
+                existing().deliveryStatus in ['PENDING_DISPATCH', 'ASSIGNED'] &&
+                incoming().riderUid == request.auth.uid &&
+                incoming().riderId == request.auth.uid &&
+                incoming().deliveryStatus == 'ACCEPTED' &&
+                exists(/databases/$(database)/documents/riders/$(request.auth.uid)) &&
+                get(/databases/$(database)/documents/riders/$(request.auth.uid)).data.approvalStatus == 'APPROVED' &&
+                incoming().diff(existing()).affectedKeys().hasOnly(['riderId', 'riderUid', 'riderName', 'riderPhone', 'deliveryStatus', 'assignedAt', 'updatedAt'])
+              ) ||
+              (existing().keys().hasAny(['riderUid']) && existing().riderUid == request.auth.uid && (
+                (existing().deliveryStatus == 'ASSIGNED' && incoming().deliveryStatus == 'ACCEPTED' &&
+                  incoming().diff(existing()).affectedKeys().hasOnly(['deliveryStatus', 'assignedAt', 'updatedAt'])) ||
+                (existing().deliveryStatus == 'ACCEPTED' && incoming().deliveryStatus == 'ARRIVED_AT_PICKUP' &&
+                  incoming().diff(existing()).affectedKeys().hasOnly(['deliveryStatus', 'updatedAt'])) ||
+                (existing().deliveryStatus == 'ARRIVED_AT_PICKUP' && incoming().deliveryStatus == 'PICKED_UP' &&
+                  incoming().pickupPinProofHash == existing().pickupPinHash &&
+                  incoming().diff(existing()).affectedKeys().hasOnly(['deliveryStatus', 'pickupPinProofHash', 'pickupPhotoRef', 'pickedUpAt', 'updatedAt'])) ||
+                (existing().deliveryStatus == 'PICKED_UP' && incoming().deliveryStatus == 'IN_TRANSIT' &&
+                  incoming().diff(existing()).affectedKeys().hasOnly(['deliveryStatus', 'updatedAt'])) ||
+                (existing().deliveryStatus == 'IN_TRANSIT' && incoming().deliveryStatus == 'ARRIVED_AT_DESTINATION' &&
+                  incoming().diff(existing()).affectedKeys().hasOnly(['deliveryStatus', 'updatedAt'])) ||
+                (existing().deliveryStatus == 'ARRIVED_AT_DESTINATION' && incoming().deliveryStatus == 'DELIVERED' &&
+                  incoming().deliveryPinProofHash == existing().deliveryPinHash &&
+                  existsAfter(/databases/$(database)/documents/riderSettlements/$(jobId)) &&
+                  incoming().diff(existing()).affectedKeys().hasOnly(['deliveryStatus', 'deliveryPinProofHash', 'completedAt', 'updatedAt'])) ||
+                (existing().deliveryStatus in ['PICKED_UP', 'IN_TRANSIT', 'ARRIVED_AT_DESTINATION'] &&
+                  incoming().deliveryStatus in ['FAILED', 'RETURN_REQUIRED'] &&
+                  incoming().diff(existing()).affectedKeys().hasOnly(['deliveryStatus', 'cancellationReason', 'updatedAt'])) ||
+                (existing().deliveryStatus == 'RETURN_REQUIRED' &&
+                  incoming().deliveryStatus == 'RETURNED' &&
+                  incoming().diff(existing()).affectedKeys().hasOnly(['deliveryStatus', 'updatedAt']))
+              ))
+            )
+          )
+        );
+      allow delete: if isSuperAdmin() && isValidId(jobId);
+
+      // /deliveryJobs/{jobId}/evidence/{evidenceId} — Pickup Photos
+      match /evidence/{evidenceId} {
+        allow get, list: if isSignedIn() && isValidId(jobId) && isValidId(evidenceId) && (
+          (resource != null && (existing().shopOwnerUid == request.auth.uid || existing().riderUid == request.auth.uid)) ||
+          isDispatcherOrAdmin()
+        );
+        allow create: if isVerifiedUser() && isValidId(jobId) && isValidId(evidenceId) &&
+          isValidDeliveryEvidence(incoming(), evidenceId, jobId) &&
+          incoming().riderUid == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          exists(/databases/$(database)/documents/deliveryJobs/$(jobId)) &&
+          get(/databases/$(database)/documents/deliveryJobs/$(jobId)).data.riderUid == request.auth.uid;
+        allow update: if false;
+        allow delete: if isSuperAdmin() && isValidId(jobId);
+      }
+    }
+
+    // /trackingLinks/{tokenHash} — Non-enumerable Public Customer Tracking Projection
+    match /trackingLinks/{tokenHash} {
+      allow get: if isValidId(tokenHash) && resource != null && (
+        (existing().active == true && existing().expiresAt > request.time) ||
+        (isSignedIn() && (
+          existing().shopOwnerUid == request.auth.uid ||
+          (existing().keys().hasAny(['riderUid']) && existing().riderUid == request.auth.uid) ||
+          isDispatcherOrAdmin()
+        ))
+      );
+      allow list: if false;
+      allow create: if isVerifiedUser() && isValidId(tokenHash) &&
+        isValidTrackingLink(incoming(), tokenHash) &&
+        incoming().shopOwnerUid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser() && isValidId(tokenHash) && isValidTrackingLink(incoming(), tokenHash) &&
+        incoming().tokenHash == existing().tokenHash &&
+        incoming().jobId == existing().jobId &&
+        incoming().shopOwnerUid == existing().shopOwnerUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          isDispatcherOrAdmin() ||
+          existing().shopOwnerUid == request.auth.uid ||
+          (existing().keys().hasAny(['riderUid']) && existing().riderUid == request.auth.uid) ||
+          ((!existing().keys().hasAny(['riderUid']) || existing().riderUid == null || existing().riderUid == '') &&
+            incoming().riderUid == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['riderUid', 'riderName', 'riderPhone', 'deliveryStatus', 'updatedAt']))
+        );
+      allow delete: if isAdmin() && isValidId(tokenHash);
+    }
+
+    // /jobEvents/{eventId} — Delivery Timeline Events
+    match /jobEvents/{eventId} {
+      allow get: if isSignedIn() && isValidId(eventId) && (
+        (resource != null && (
+          existing().shopOwnerUid == request.auth.uid ||
+          (existing().keys().hasAny(['riderUid']) && existing().riderUid == request.auth.uid)
+        )) ||
+        isDispatcherOrAdmin()
+      );
+      allow list: if isSignedIn() && (
+        resource.data.shopOwnerUid == request.auth.uid ||
+        resource.data.riderUid == request.auth.uid ||
+        isDispatcherOrAdmin()
+      );
+      allow create: if isVerifiedUser() && isValidId(eventId) &&
+        isValidJobEvent(incoming(), eventId) &&
+        incoming().createdAt == request.time &&
+        existsAfter(/databases/$(database)/documents/deliveryJobs/$(incoming().jobId));
+      allow update, delete: if false;
+    }
+
+    // /payments/{paymentId} — Daraja Payments (Never allow client to mark PAID)
+    match /payments/{paymentId} {
+      allow get: if isSignedIn() && isValidId(paymentId) && (
+        (resource != null && existing().shopOwnerUid == request.auth.uid) || isAdmin()
+      );
+      allow list: if isSignedIn() && (
+        resource.data.shopOwnerUid == request.auth.uid || isAdmin()
+      );
+      allow create: if isVerifiedUser() && isValidId(paymentId) &&
+        isValidPayment(incoming(), paymentId) &&
+        incoming().shopOwnerUid == request.auth.uid &&
+        incoming().paymentStatus in ['INITIATED', 'PENDING_STK', 'AWAITING_CONFIG'] &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser() && isValidId(paymentId) && isValidPayment(incoming(), paymentId) &&
+        incoming().paymentId == existing().paymentId &&
+        incoming().jobId == existing().jobId &&
+        incoming().shopId == existing().shopId &&
+        incoming().shopOwnerUid == existing().shopOwnerUid &&
+        incoming().amount == existing().amount &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (existing().shopOwnerUid == request.auth.uid &&
+            !(existing().paymentStatus in ['PAID', 'REFUNDED']) &&
+            incoming().paymentStatus in ['INITIATED', 'PENDING_STK', 'AWAITING_CONFIG', 'FAILED', 'CANCELLED', 'TIMEOUT'] &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['paymentStatus', 'checkoutRequestId', 'merchantRequestId', 'failureReason', 'updatedAt'])
+          )
+        );
+      allow delete: if false;
+    }
+
+    // /riderSettlements/{settlementId} — Rider Earnings & Admin Reconciliation
+    match /riderSettlements/{settlementId} {
+      allow get: if isSignedIn() && isValidId(settlementId) && (
+        (resource != null && existing().riderUid == request.auth.uid) || isAdmin()
+      );
+      allow list: if isSignedIn() && (
+        resource.data.riderUid == request.auth.uid || isAdmin()
+      );
+      allow create: if isVerifiedUser() && isValidId(settlementId) &&
+        isValidSettlement(incoming(), settlementId) &&
+        incoming().settlementStatus == 'PENDING' &&
+        incoming().createdAt == request.time &&
+        (
+          isAdmin() ||
+          (incoming().riderUid == request.auth.uid &&
+            exists(/databases/$(database)/documents/deliveryJobs/$(incoming().jobId)) &&
+            get(/databases/$(database)/documents/deliveryJobs/$(incoming().jobId)).data.riderUid == request.auth.uid &&
+            get(/databases/$(database)/documents/deliveryJobs/$(incoming().jobId)).data.deliveryFee == incoming().grossDeliveryFee &&
+            get(/databases/$(database)/documents/deliveryJobs/$(incoming().jobId)).data.riderEarning == incoming().riderEarning &&
+            getAfter(/databases/$(database)/documents/deliveryJobs/$(incoming().jobId)).data.deliveryStatus == 'DELIVERED'
+          )
+        );
+      allow update: if isAdmin() && isValidId(settlementId) &&
+        isValidSettlement(incoming(), settlementId) &&
+        existing().settlementStatus != 'SETTLED' &&
+        incoming().riderId == existing().riderId &&
+        incoming().jobId == existing().jobId &&
+        incoming().grossDeliveryFee == existing().grossDeliveryFee &&
+        incoming().riderEarning == existing().riderEarning &&
+        incoming().createdAt == existing().createdAt;
+      allow delete: if false;
+    }
+
+    // /pricingRules/{ruleId} — Admin-only Pricing Configuration
+    match /pricingRules/{ruleId} {
+      allow get: if isSignedIn() && isValidId(ruleId);
+      allow list: if isSignedIn() && (resource.data.active == true || isAdmin());
+      allow create, update: if isAdmin() && isValidId(ruleId) &&
+        isValidPricingRule(incoming(), ruleId) &&
+        incoming().updatedAt == request.time;
+      allow delete: if isSuperAdmin() && isValidId(ruleId);
+    }
+
+    // /serviceZones/{zoneId} — Admin-only Service Zones
+    match /serviceZones/{zoneId} {
+      allow get: if isSignedIn() && isValidId(zoneId);
+      allow list: if isSignedIn() && (resource.data.active == true || isAdmin());
+      allow create, update: if isAdmin() && isValidId(zoneId) &&
+        isValidServiceZone(incoming(), zoneId);
+      allow delete: if isSuperAdmin() && isValidId(zoneId);
+    }
+
+    // /notifications/{notificationId} — User-scoped Notifications
+    match /notifications/{notificationId} {
+      allow get: if isSignedIn() && isValidId(notificationId) && (
+        (resource != null && existing().recipientUid == request.auth.uid) || isAdmin()
+      );
+      allow list: if isSignedIn() && (
+        resource.data.recipientUid == request.auth.uid || isAdmin()
+      );
+      allow create: if isVerifiedUser() && isValidId(notificationId) &&
+        isValidNotification(incoming(), notificationId) &&
+        incoming().read == false &&
+        incoming().createdAt == request.time;
+      allow update: if isVerifiedUser() && isValidId(notificationId) &&
+        isValidNotification(incoming(), notificationId) &&
+        existing().recipientUid == request.auth.uid &&
+        incoming().recipientUid == existing().recipientUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['read']);
+      allow delete: if isOwner(existing().recipientUid) || isAdmin();
+    }
+
+    // /supportTickets/{ticketId} — Merchant/Rider Support Tickets
+    match /supportTickets/{ticketId} {
+      allow get: if isSignedIn() && isValidId(ticketId) && (
+        (resource != null && existing().createdBy == request.auth.uid) || isDispatcherOrAdmin()
+      );
+      allow list: if isSignedIn() && (
+        resource.data.createdBy == request.auth.uid || isDispatcherOrAdmin()
+      );
+      allow create: if isVerifiedUser() && isValidId(ticketId) &&
+        isValidSupportTicket(incoming(), ticketId) &&
+        incoming().createdBy == request.auth.uid &&
+        incoming().status == 'OPEN' &&
+        incoming().createdAt == request.time;
+      allow update: if isDispatcherOrAdmin() && isValidId(ticketId) &&
+        isValidSupportTicket(incoming(), ticketId) &&
+        incoming().createdBy == existing().createdBy &&
+        incoming().createdAt == existing().createdAt;
+      allow delete: if isSuperAdmin() && isValidId(ticketId);
+    }
+
+    // /activityLogs/{logId} — Immutable Audit Log
+    match /activityLogs/{logId} {
+      allow get: if isAdmin() && isValidId(logId);
+      allow list: if isAdmin();
+      allow create: if isVerifiedUser() && isValidId(logId) &&
+        isValidActivityLog(incoming(), logId) &&
+        incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+  }
+}
