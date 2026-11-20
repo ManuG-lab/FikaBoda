@@ -114,8 +114,20 @@ export const RiderPortal: React.FC<{
     await auth.currentUser?.reload().catch(() => {});
   };
 
-  const activeJob =
-    myJobs.find((j) => !['DELIVERED', 'CANCELLED', 'RETURNED'].includes(j.deliveryStatus)) || null;
+  const assignedJobs = myJobs.filter((j) => j.deliveryStatus === 'ASSIGNED');
+  const inProgressJob =
+    myJobs.find(
+      (j) =>
+        ![
+          'PENDING_DISPATCH',
+          'ASSIGNED',
+          'DELIVERED',
+          'CANCELLED',
+          'RETURNED',
+          'FAILED',
+        ].includes(j.deliveryStatus)
+    ) || null;
+  const activeJob = inProgressJob || assignedJobs[0] || null;
 
   // Controlled GPS watchPosition when enabled & rider approved
   useEffect(() => {
@@ -624,6 +636,34 @@ export const RiderPortal: React.FC<{
     }
   };
 
+  const handleAcceptJob = async (job: DeliveryJob) => {
+    setAcceptingJobId(job.jobId);
+    try {
+      await acceptJobTransaction(job.jobId, rider);
+      pushToast({
+        kind: 'success',
+        title: `Accepted ${job.referenceCode}`,
+        description: 'Head to pickup shop and collect Parcel PIN.',
+      });
+      setTab('active');
+    } catch (err: any) {
+      let msg = err?.message || 'Unable to accept delivery job.';
+      try {
+        const parsed = JSON.parse(msg);
+        if (parsed?.error) msg = parsed.error;
+      } catch {
+        // keep plain error message
+      }
+      pushToast({
+        kind: 'error',
+        title: 'Could not claim job',
+        description: msg,
+      });
+    } finally {
+      setAcceptingJobId(null);
+    }
+  };
+
   const totalPendingKes = settlements
     .filter((s) => s.settlementStatus !== 'SETTLED')
     .reduce((acc, s) => acc + s.riderEarning, 0);
@@ -633,7 +673,11 @@ export const RiderPortal: React.FC<{
 
   const navItems: Array<{ id: RiderTab; label: string; icon: any }> = [
     { id: 'home', label: 'Home', icon: Home },
-    { id: 'available', label: `Jobs (${availableJobs.length})`, icon: ClipboardList },
+    {
+      id: 'available',
+      label: `Jobs (${availableJobs.length + assignedJobs.length})`,
+      icon: ClipboardList,
+    },
     { id: 'active', label: 'Active', icon: Navigation },
     { id: 'earnings', label: 'Earnings', icon: Wallet },
     { id: 'history', label: 'History', icon: History },
@@ -784,16 +828,51 @@ export const RiderPortal: React.FC<{
                 </div>
               </div>
 
-              {activeJob ? (
+              {assignedJobs.length > 0 && (
+                <div className="space-y-2.5">
+                  {assignedJobs.map((job) => (
+                    <div
+                      key={job.jobId}
+                      className="bg-[#D5FF70]/25 border-2 border-[#123C32] rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-mono-tabular font-bold uppercase tracking-wider text-[#123C32]">
+                          DISPATCHER ASSIGNED · {job.referenceCode}
+                        </p>
+                        <p className="text-sm font-bold text-[#17231F] mt-0.5">
+                          {job.shopName} → {job.deliveryAddress}
+                        </p>
+                        <p className="text-xs text-[#77827B] mt-0.5">
+                          {formatKes(job.riderEarning)} · {job.roadDistanceKm.toFixed(1)} km · ~{job.estimatedDuration}m
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={Boolean(inProgressJob) || acceptingJobId !== null}
+                        onClick={() => void handleAcceptJob(job)}
+                        className="min-h-[44px] px-4 rounded-xl bg-[#123C32] text-[#D5FF70] text-xs font-bold shrink-0 hover:bg-[#0D2E26] disabled:opacity-50 cursor-pointer"
+                      >
+                        {inProgressJob
+                          ? 'Complete Active Job First'
+                          : acceptingJobId === job.jobId
+                            ? 'Accepting...'
+                            : 'Accept Delivery Job'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {inProgressJob ? (
                 <div className="bg-white border border-[#E3E7E2] rounded-xl p-4 flex items-center justify-between gap-3">
                   <div>
                     <p className="text-xs font-mono-tabular font-bold text-[#123C32]">
-                      ACTIVE · {activeJob.referenceCode}
+                      ACTIVE · {inProgressJob.referenceCode}
                     </p>
                     <p className="text-sm font-semibold text-[#17231F]">
-                      {activeJob.shopName} → {activeJob.deliveryAddress}
+                      {inProgressJob.shopName} → {inProgressJob.deliveryAddress}
                     </p>
-                    <DeliveryStatusText status={activeJob.deliveryStatus} />
+                    <DeliveryStatusText status={inProgressJob.deliveryStatus} />
                   </div>
                   <button
                     type="button"
@@ -804,21 +883,102 @@ export const RiderPortal: React.FC<{
                   </button>
                 </div>
               ) : (
-                <button
-                  type="button"
-                  onClick={() => setTab('available')}
-                  className="w-full min-h-[48px] rounded-xl bg-white border border-[#E3E7E2] hover:border-[#123C32] text-sm font-semibold text-[#123C32] flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  <ClipboardList className="w-4 h-4" />
-                  <span>Browse Available Westlands Jobs ({availableJobs.length})</span>
-                </button>
+                <div className="space-y-3">
+                  {availableJobs.slice(0, 3).map((job) => (
+                    <div
+                      key={job.jobId}
+                      className="bg-white border border-[#E3E7E2] rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-xs font-mono-tabular font-bold text-[#123C32]">
+                          OPEN DISPATCH · {job.referenceCode} · {job.packageSize}
+                        </p>
+                        <p className="text-sm font-bold text-[#17231F] mt-0.5">
+                          {job.shopName} → {job.deliveryAddress}
+                        </p>
+                        <p className="text-xs text-[#77827B] mt-0.5">
+                          Earning {formatKes(job.riderEarning)} · {job.roadDistanceKm.toFixed(1)} km · ~{job.estimatedDuration}m
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={acceptingJobId !== null}
+                        onClick={() => void handleAcceptJob(job)}
+                        className="min-h-[44px] px-4 rounded-xl bg-[#123C32] text-white text-xs font-bold shrink-0 hover:bg-[#0D2E26] disabled:opacity-50 cursor-pointer"
+                      >
+                        {acceptingJobId === job.jobId ? 'Accepting...' : 'Accept Delivery Job'}
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => setTab('available')}
+                    className="w-full min-h-[48px] rounded-xl bg-white border border-[#E3E7E2] hover:border-[#123C32] text-sm font-semibold text-[#123C32] flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <ClipboardList className="w-4 h-4" />
+                    <span>Browse All Available Westlands Jobs ({availableJobs.length})</span>
+                  </button>
+                </div>
               )}
             </div>
           )}
 
           {/* AVAILABLE JOBS */}
           {tab === 'available' && (
-            <div className="space-y-3">
+            <div className="space-y-4">
+              {assignedJobs.length > 0 && (
+                <div className="space-y-3">
+                  <h2 className="font-display text-base font-bold text-[#123C32]">
+                    Assigned to You ({assignedJobs.length})
+                  </h2>
+                  {assignedJobs.map((job) => (
+                    <div
+                      key={job.jobId}
+                      className="bg-[#D5FF70]/20 border-2 border-[#123C32] rounded-xl p-4 space-y-3"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-xs font-mono-tabular font-bold text-[#123C32]">
+                            ASSIGNED · {job.referenceCode} · {job.packageSize}
+                          </p>
+                          <h3 className="text-sm font-bold text-[#17231F] mt-0.5">{job.shopName}</h3>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-mono-tabular text-base font-bold text-[#123C32]">
+                            {formatKes(job.riderEarning)}
+                          </p>
+                          <p className="text-[11px] font-mono-tabular text-[#77827B]">
+                            {job.roadDistanceKm.toFixed(1)} km · ~{job.estimatedDuration}m
+                          </p>
+                        </div>
+                      </div>
+                      <div className="text-xs space-y-1 text-[#77827B]">
+                        <p>
+                          <span className="font-semibold text-[#17231F]">Pickup:</span>{' '}
+                          {job.pickupAddress}
+                        </p>
+                        <p>
+                          <span className="font-semibold text-[#17231F]">Dropoff:</span>{' '}
+                          {job.deliveryAddress}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={Boolean(inProgressJob) || acceptingJobId !== null}
+                        onClick={() => void handleAcceptJob(job)}
+                        className="w-full min-h-[44px] rounded-xl bg-[#123C32] text-[#D5FF70] text-xs font-bold hover:bg-[#0D2E26] disabled:opacity-50 cursor-pointer"
+                      >
+                        {inProgressJob
+                          ? 'Complete Active Job First'
+                          : acceptingJobId === job.jobId
+                            ? 'Accepting...'
+                            : 'Accept Delivery Job'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               <div className="flex items-center justify-between">
                 <h2 className="font-display text-base font-bold text-[#17231F]">
                   Available Westlands Jobs ({availableJobs.length})
@@ -826,7 +986,7 @@ export const RiderPortal: React.FC<{
               </div>
               {availableJobs.length === 0 ? (
                 <div className="bg-white border border-[#E3E7E2] rounded-xl p-8 text-center text-xs text-[#77827B]">
-                  No open jobs waiting right now. Keep your status Online for new shop dispatches.
+                  No open jobs waiting right now. Pull down to refresh or keep your status Online for new shop dispatches.
                 </div>
               ) : (
                 availableJobs.map((job) => (
@@ -862,30 +1022,11 @@ export const RiderPortal: React.FC<{
                     </div>
                     <button
                       type="button"
-                      disabled={Boolean(activeJob) || acceptingJobId !== null}
-                      onClick={async () => {
-                        setAcceptingJobId(job.jobId);
-                        try {
-                          await acceptJobTransaction(job.jobId, rider);
-                          pushToast({
-                            kind: 'success',
-                            title: `Accepted ${job.referenceCode}`,
-                            description: 'Head to pickup shop and collect Parcel PIN.',
-                          });
-                          setTab('active');
-                        } catch (err: any) {
-                          pushToast({
-                            kind: 'error',
-                            title: 'Could not claim job',
-                            description: err?.message,
-                          });
-                        } finally {
-                          setAcceptingJobId(null);
-                        }
-                      }}
+                      disabled={Boolean(inProgressJob) || acceptingJobId !== null}
+                      onClick={() => void handleAcceptJob(job)}
                       className="w-full min-h-[44px] rounded-xl bg-[#123C32] text-white text-xs font-bold hover:bg-[#0D2E26] disabled:opacity-50 cursor-pointer"
                     >
-                      {activeJob
+                      {inProgressJob
                         ? 'Complete Active Job First'
                         : acceptingJobId === job.jobId
                           ? 'Accepting...'
@@ -985,19 +1126,35 @@ export const RiderPortal: React.FC<{
                           </label>
                         )}
 
-                        <button
-                          type="button"
-                          disabled={actionBusy}
-                          onClick={() => void handleAdvanceStep()}
-                          className="w-full min-h-[48px] rounded-xl bg-[#123C32] text-[#D5FF70] text-sm font-bold hover:bg-[#0D2E26] disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
-                        >
-                          <CheckCircle2 className="w-4 h-4" />
-                          <span>
-                            {actionBusy
-                              ? 'Updating...'
-                              : `Mark ${getDeliveryStatusLabel(nextStatus)}`}
-                          </span>
-                        </button>
+                        {activeJob.deliveryStatus === 'ASSIGNED' ? (
+                          <button
+                            type="button"
+                            disabled={acceptingJobId !== null}
+                            onClick={() => void handleAcceptJob(activeJob)}
+                            className="w-full min-h-[48px] rounded-xl bg-[#123C32] text-[#D5FF70] text-sm font-bold hover:bg-[#0D2E26] disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
+                          >
+                            <CheckCircle2 className="w-4 h-4" />
+                            <span>
+                              {acceptingJobId === activeJob.jobId
+                                ? 'Accepting...'
+                                : 'Accept Assigned Delivery Job'}
+                            </span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={actionBusy}
+                            onClick={() => void handleAdvanceStep()}
+                            className="w-full min-h-[48px] rounded-xl bg-[#123C32] text-[#D5FF70] text-sm font-bold hover:bg-[#0D2E26] disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
+                          >
+                            <CheckCircle2 className="w-4 h-4" />
+                            <span>
+                              {actionBusy
+                                ? 'Updating...'
+                                : `Mark ${getDeliveryStatusLabel(nextStatus)}`}
+                            </span>
+                          </button>
+                        )}
                       </div>
                     )}
 

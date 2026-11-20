@@ -77,6 +77,18 @@ function sanitizeLatLng(loc?: LatLng | null): LatLng | undefined {
   return { lat, lng };
 }
 
+function getCreatedAtMillis(item: { createdAt?: unknown }): number {
+  const ts = item?.createdAt as { toMillis?: () => number; seconds?: number } | undefined;
+  if (!ts) return 0;
+  if (typeof ts.toMillis === 'function') return ts.toMillis();
+  if (typeof ts.seconds === 'number') return ts.seconds * 1000;
+  return 0;
+}
+
+function sortByCreatedAtDesc<T extends { createdAt?: unknown }>(items: T[]): T[] {
+  return [...items].sort((a, b) => getCreatedAtMillis(b) - getCreatedAtMillis(a));
+}
+
 // ==================================================
 // Auth Profile & Role Bootstrap
 // ==================================================
@@ -781,12 +793,11 @@ export function subscribeToMerchantJobs(
   const q = query(
     collection(db, path),
     where('shopOwnerUid', '==', shopOwnerUid),
-    orderBy('createdAt', 'desc'),
     limit(150)
   );
   return onSnapshot(
     q,
-    (snap) => cb(snap.docs.map((d) => d.data() as DeliveryJob)),
+    (snap) => cb(sortByCreatedAtDesc(snap.docs.map((d) => d.data() as DeliveryJob))),
     (err) => handleFirestoreError(err, OperationType.LIST, path)
   );
 }
@@ -799,12 +810,11 @@ export function subscribeToRiderJobs(
   const q = query(
     collection(db, path),
     where('riderUid', '==', riderUid),
-    orderBy('createdAt', 'desc'),
     limit(100)
   );
   return onSnapshot(
     q,
-    (snap) => cb(snap.docs.map((d) => d.data() as DeliveryJob)),
+    (snap) => cb(sortByCreatedAtDesc(snap.docs.map((d) => d.data() as DeliveryJob))),
     (err) => handleFirestoreError(err, OperationType.LIST, path)
   );
 }
@@ -814,12 +824,11 @@ export function subscribeToAvailableJobs(cb: (jobs: DeliveryJob[]) => void): Uns
   const q = query(
     collection(db, path),
     where('deliveryStatus', '==', 'PENDING_DISPATCH'),
-    orderBy('createdAt', 'desc'),
     limit(50)
   );
   return onSnapshot(
     q,
-    (snap) => cb(snap.docs.map((d) => d.data() as DeliveryJob)),
+    (snap) => cb(sortByCreatedAtDesc(snap.docs.map((d) => d.data() as DeliveryJob))),
     (err) => handleFirestoreError(err, OperationType.LIST, path)
   );
 }
@@ -1054,9 +1063,16 @@ export async function createDeliveryJobTransaction(params: {
 }
 
 export async function acceptJobTransaction(jobId: string, rider: Rider): Promise<void> {
+  if (rider.approvalStatus !== 'APPROVED') {
+    throw new Error('Your rider profile must be approved by Admin before accepting jobs.');
+  }
   const jobRef = doc(db, 'deliveryJobs', jobId);
+  let opType: OperationType = OperationType.GET;
+  let opPath = `deliveryJobs/${jobId}`;
   try {
     await runTransaction(db, async (tx) => {
+      opType = OperationType.GET;
+      opPath = `deliveryJobs/${jobId}`;
       const snap = await tx.get(jobRef);
       if (!snap.exists()) {
         throw new Error('Delivery job no longer exists.');
@@ -1070,16 +1086,26 @@ export async function acceptJobTransaction(jobId: string, rider: Rider): Promise
       }
 
       const trackRef = doc(db, 'trackingLinks', job.customerTrackingTokenHash);
+      opPath = `trackingLinks/${job.customerTrackingTokenHash}`;
       const trackSnap = await tx.get(trackRef);
       const isAlreadyAssignedToMe = job.deliveryStatus === 'ASSIGNED' && job.riderUid === rider.uid;
 
+      opType = OperationType.UPDATE;
+      opPath = `deliveryJobs/${jobId}`;
       if (isAlreadyAssignedToMe) {
         tx.update(jobRef, {
+          riderId: rider.riderId,
+          riderUid: rider.uid,
+          riderName: rider.fullName.slice(0, 120),
+          riderPhone: rider.phoneNumber.slice(0, 24),
           deliveryStatus: 'ACCEPTED',
           updatedAt: serverTimestamp(),
         });
         if (trackSnap.exists()) {
           tx.update(trackRef, {
+            riderUid: rider.uid,
+            riderName: rider.fullName.slice(0, 120),
+            riderPhone: rider.phoneNumber.slice(0, 24),
             deliveryStatus: 'ACCEPTED',
             updatedAt: serverTimestamp(),
           });
@@ -1131,14 +1157,22 @@ export async function acceptJobTransaction(jobId: string, rider: Rider): Promise
         createdAt: serverTimestamp(),
       });
     });
+
+    // Best-effort status flip to ON_DELIVERY after job claim succeeds
+    void updateDoc(doc(db, 'riders', rider.riderId), {
+      availabilityStatus: 'ON_DELIVERY',
+      updatedAt: serverTimestamp(),
+    }).catch(() => {});
   } catch (error) {
     if (
       error instanceof Error &&
-      (error.message.includes('already accepted') || error.message.includes('no longer'))
+      (error.message.includes('already accepted') ||
+        error.message.includes('no longer') ||
+        error.message.includes('approved by Admin'))
     ) {
       throw error;
     }
-    handleFirestoreError(error, OperationType.UPDATE, `deliveryJobs/${jobId}`);
+    handleFirestoreError(error, opType, opPath);
   }
 }
 
@@ -1218,9 +1252,13 @@ export async function advanceJobStatusTransaction(params: {
   }
 
   const cleanLoc = sanitizeLatLng(location);
+  let opType: OperationType = OperationType.GET;
+  let opPath = `deliveryJobs/${job.jobId}`;
 
   try {
     await runTransaction(db, async (tx) => {
+      opType = OperationType.GET;
+      opPath = `deliveryJobs/${job.jobId}`;
       const jobRef = doc(db, 'deliveryJobs', job.jobId);
       const jobSnap = await tx.get(jobRef);
       if (!jobSnap.exists()) {
@@ -1234,9 +1272,18 @@ export async function advanceJobStatusTransaction(params: {
       }
 
       const trackRef = doc(db, 'trackingLinks', freshJob.customerTrackingTokenHash);
+      opPath = `trackingLinks/${freshJob.customerTrackingTokenHash}`;
       const trackSnap = await tx.get(trackRef);
+
       const settlementRef = doc(db, 'riderSettlements', freshJob.jobId);
-      const settlementSnap = nextStatus === 'DELIVERED' ? await tx.get(settlementRef) : null;
+      let settlementSnap = null;
+      if (nextStatus === 'DELIVERED') {
+        opPath = `riderSettlements/${freshJob.jobId}`;
+        settlementSnap = await tx.get(settlementRef);
+      }
+
+      opType = OperationType.UPDATE;
+      opPath = `deliveryJobs/${job.jobId}`;
 
       const jobUpdates: Record<string, any> = {
         deliveryStatus: nextStatus,
@@ -1284,16 +1331,17 @@ export async function advanceJobStatusTransaction(params: {
         tx.update(trackRef, trackUpdates);
       }
 
+      const effectiveRiderId = freshJob.riderId || freshJob.riderUid;
       if (
         nextStatus === 'DELIVERED' &&
-        freshJob.riderId &&
+        effectiveRiderId &&
         freshJob.riderUid &&
         settlementSnap &&
         !settlementSnap.exists()
       ) {
         tx.set(settlementRef, {
           settlementId: freshJob.jobId,
-          riderId: freshJob.riderId,
+          riderId: effectiveRiderId,
           riderUid: freshJob.riderUid,
           jobId: freshJob.jobId,
           grossDeliveryFee: freshJob.deliveryFee,
@@ -1337,7 +1385,7 @@ export async function advanceJobStatusTransaction(params: {
     ) {
       throw error;
     }
-    handleFirestoreError(error, OperationType.UPDATE, `deliveryJobs/${job.jobId}`);
+    handleFirestoreError(error, opType, opPath);
   }
 }
 
@@ -1346,8 +1394,12 @@ export async function cancelJobTransaction(
   actorUid: string,
   reason: string
 ): Promise<void> {
+  let opType: OperationType = OperationType.GET;
+  let opPath = `deliveryJobs/${job.jobId}`;
   try {
     await runTransaction(db, async (tx) => {
+      opType = OperationType.GET;
+      opPath = `deliveryJobs/${job.jobId}`;
       const jobRef = doc(db, 'deliveryJobs', job.jobId);
       const jobSnap = await tx.get(jobRef);
       if (!jobSnap.exists()) {
@@ -1355,8 +1407,11 @@ export async function cancelJobTransaction(
       }
       const freshJob = jobSnap.data() as DeliveryJob;
       const trackRef = doc(db, 'trackingLinks', freshJob.customerTrackingTokenHash);
+      opPath = `trackingLinks/${freshJob.customerTrackingTokenHash}`;
       const trackSnap = await tx.get(trackRef);
 
+      opType = OperationType.UPDATE;
+      opPath = `deliveryJobs/${job.jobId}`;
       tx.update(jobRef, {
         deliveryStatus: 'CANCELLED',
         cancellationReason: reason.trim().slice(0, 240) || 'Cancelled by authorized user',
@@ -1395,7 +1450,7 @@ export async function cancelJobTransaction(
       }
     });
   } catch (error) {
-    handleFirestoreError(error, OperationType.UPDATE, `deliveryJobs/${job.jobId}`);
+    handleFirestoreError(error, opType, opPath);
   }
 }
 
@@ -1404,9 +1459,13 @@ export async function adminAssignRiderTransaction(
   job: DeliveryJob,
   rider: Rider
 ): Promise<void> {
+  let opType: OperationType = OperationType.GET;
+  let opPath = `deliveryJobs/${job.jobId}`;
   try {
     const cleanLoc = sanitizeLatLng(rider.currentLocation);
     await runTransaction(db, async (tx) => {
+      opType = OperationType.GET;
+      opPath = `deliveryJobs/${job.jobId}`;
       const jobRef = doc(db, 'deliveryJobs', job.jobId);
       const jobSnap = await tx.get(jobRef);
       if (!jobSnap.exists()) {
@@ -1414,8 +1473,11 @@ export async function adminAssignRiderTransaction(
       }
       const freshJob = jobSnap.data() as DeliveryJob;
       const trackRef = doc(db, 'trackingLinks', freshJob.customerTrackingTokenHash);
+      opPath = `trackingLinks/${freshJob.customerTrackingTokenHash}`;
       const trackSnap = await tx.get(trackRef);
 
+      opType = OperationType.UPDATE;
+      opPath = `deliveryJobs/${job.jobId}`;
       tx.update(jobRef, {
         riderId: rider.riderId,
         riderUid: rider.uid,
@@ -1459,7 +1521,7 @@ export async function adminAssignRiderTransaction(
       });
     });
   } catch (error) {
-    handleFirestoreError(error, OperationType.UPDATE, `deliveryJobs/${job.jobId}`);
+    handleFirestoreError(error, opType, opPath);
   }
 }
 
@@ -1475,12 +1537,11 @@ export function subscribeToPaymentsByOwner(
   const q = query(
     collection(db, path),
     where('shopOwnerUid', '==', shopOwnerUid),
-    orderBy('createdAt', 'desc'),
     limit(150)
   );
   return onSnapshot(
     q,
-    (snap) => cb(snap.docs.map((d) => d.data() as PaymentRecord)),
+    (snap) => cb(sortByCreatedAtDesc(snap.docs.map((d) => d.data() as PaymentRecord))),
     (err) => handleFirestoreError(err, OperationType.LIST, path)
   );
 }
@@ -1567,12 +1628,11 @@ export function subscribeToSettlementsByRider(
   const q = query(
     collection(db, path),
     where('riderUid', '==', riderUid),
-    orderBy('createdAt', 'desc'),
     limit(150)
   );
   return onSnapshot(
     q,
-    (snap) => cb(snap.docs.map((d) => d.data() as RiderSettlement)),
+    (snap) => cb(sortByCreatedAtDesc(snap.docs.map((d) => d.data() as RiderSettlement))),
     (err) => handleFirestoreError(err, OperationType.LIST, path)
   );
 }
@@ -1709,12 +1769,11 @@ export function subscribeToNotifications(
   const q = query(
     collection(db, path),
     where('recipientUid', '==', recipientUid),
-    orderBy('createdAt', 'desc'),
     limit(50)
   );
   return onSnapshot(
     q,
-    (snap) => cb(snap.docs.map((d) => d.data() as AppNotification)),
+    (snap) => cb(sortByCreatedAtDesc(snap.docs.map((d) => d.data() as AppNotification))),
     (err) => handleFirestoreError(err, OperationType.LIST, path)
   );
 }
@@ -1735,15 +1794,13 @@ export function subscribeToSupportTickets(
   const path = 'supportTickets';
   const q = isAdminView
     ? query(collection(db, path), orderBy('createdAt', 'desc'), limit(100))
-    : query(
-        collection(db, path),
-        where('createdBy', '==', uid),
-        orderBy('createdAt', 'desc'),
-        limit(50)
-      );
+    : query(collection(db, path), where('createdBy', '==', uid), limit(50));
   return onSnapshot(
     q,
-    (snap) => cb(snap.docs.map((d) => d.data() as SupportTicket)),
+    (snap) => {
+      const items = snap.docs.map((d) => d.data() as SupportTicket);
+      cb(isAdminView ? items : sortByCreatedAtDesc(items));
+    },
     (err) => handleFirestoreError(err, OperationType.LIST, path)
   );
 }

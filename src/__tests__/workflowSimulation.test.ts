@@ -1333,13 +1333,16 @@ describe('Document Validation, Firestore Rules & PWA Readiness Checks', () => {
     ).toBe(false);
   });
 
-  it('includes hardened rules for rider verificationDocs & delivery evidence', () => {
+  it('includes hardened rules for rider verificationDocs, delivery evidence, and transactional null reads', () => {
     const rules = fs.readFileSync(path.resolve(process.cwd(), 'firestore.rules'), 'utf8');
     expect(rules).toContain('match /verificationDocs/{docKey}');
     expect(rules).toContain("docKey in ['nationalId', 'drivingLicence', 'insurance']");
     expect(rules).toContain('data.byteSize > 0 && data.byteSize <= 700000');
     expect(rules).toContain('!incoming().keys().hasAny([\'reviewedBy\', \'reviewNotes\'])');
     expect(rules).toContain('match /evidence/{evidenceId}');
+    expect(rules).toContain('match /riderSettlements/{settlementId}');
+    expect(rules).toContain('get(/databases/$(database)/documents/deliveryJobs/$(settlementId)).data.riderUid == request.auth.uid');
+    expect(rules).toContain('(isSignedIn() && resource == null)');
   });
 
   it('configures PWA autoUpdate, Service Worker registration, and PullToRefresh', () => {
@@ -1349,6 +1352,8 @@ describe('Document Validation, Firestore Rules & PWA Readiness Checks', () => {
 
     expect(viteCfg).toContain('VitePWA(');
     expect(viteCfg).toContain("registerType: 'autoUpdate'");
+    expect(viteCfg).toContain('skipWaiting: true');
+    expect(viteCfg).toContain('clientsClaim: true');
     expect(mainTsx).toContain("from 'virtual:pwa-register'");
     expect(mainTsx).toContain('fikaboda-sw-need-refresh');
     expect(indexHtml).toContain('apple-touch-icon.png');

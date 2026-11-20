@@ -256,20 +256,21 @@ service cloud.firestore {
         data.customerPhone is string && data.customerPhone.size() >= 7 && data.customerPhone.size() <= 24 &&
         data.pickupAddress is string && data.pickupAddress.size() >= 3 && data.pickupAddress.size() <= 240 &&
         isLatLng(data.pickupCoordinates) &&
-        (!data.keys().hasAny(['pickupInstructions']) || (data.pickupInstructions is string && data.pickupInstructions.size() <= 300)) &&
+        (!data.keys().hasAny(['pickupInstructions']) || data.pickupInstructions == null || (data.pickupInstructions is string && data.pickupInstructions.size() <= 300)) &&
         data.deliveryAddress is string && data.deliveryAddress.size() >= 3 && data.deliveryAddress.size() <= 240 &&
         isLatLng(data.deliveryCoordinates) &&
-        (!data.keys().hasAny(['deliveryInstructions']) || (data.deliveryInstructions is string && data.deliveryInstructions.size() <= 300)) &&
+        (!data.keys().hasAny(['deliveryInstructions']) || data.deliveryInstructions == null || (data.deliveryInstructions is string && data.deliveryInstructions.size() <= 300)) &&
         data.packageCategory is string && data.packageCategory.size() >= 2 && data.packageCategory.size() <= 64 &&
-        (!data.keys().hasAny(['packageDescription']) || (data.packageDescription is string && data.packageDescription.size() <= 240)) &&
+        (!data.keys().hasAny(['packageDescription']) || data.packageDescription == null || (data.packageDescription is string && data.packageDescription.size() <= 240)) &&
         data.packageSize in ['SMALL', 'MEDIUM', 'LARGE'] &&
-        (!data.keys().hasAny(['specialHandling']) || (data.specialHandling is string && data.specialHandling.size() <= 160)) &&
+        (!data.keys().hasAny(['specialHandling']) || data.specialHandling == null || (data.specialHandling is string && data.specialHandling.size() <= 160)) &&
         data.roadDistanceKm is number && data.roadDistanceKm > 0 && data.roadDistanceKm <= 250 &&
         data.estimatedDuration is number && data.estimatedDuration > 0 && data.estimatedDuration <= 600 &&
         data.deliveryFee is number && data.deliveryFee >= 50 && data.deliveryFee <= 50000 &&
         data.riderEarning is number && data.riderEarning >= 0 &&
         data.platformRevenue is number && data.platformRevenue >= 0 &&
-        (data.riderEarning + data.platformRevenue) == data.deliveryFee &&
+        (data.riderEarning + data.platformRevenue) >= (data.deliveryFee - 0.01) &&
+        (data.riderEarning + data.platformRevenue) <= (data.deliveryFee + 0.01) &&
         data.paymentStatus in ['INITIATED', 'UNPAID', 'PENDING_STK', 'AWAITING_CONFIG', 'PAID', 'FAILED', 'REFUNDED'] &&
         data.deliveryStatus in [
           'PENDING_DISPATCH', 'ASSIGNED', 'ACCEPTED', 'ARRIVED_AT_PICKUP',
@@ -279,15 +280,15 @@ service cloud.firestore {
         isValidId(data.customerTrackingTokenHash) &&
         isValidId(data.pickupPinHash) &&
         isValidId(data.deliveryPinHash) &&
-        (!data.keys().hasAny(['pickupPinProofHash']) || isValidId(data.pickupPinProofHash)) &&
-        (!data.keys().hasAny(['deliveryPinProofHash']) || isValidId(data.deliveryPinProofHash)) &&
-        (!data.keys().hasAny(['pickupPhotoRef']) || (data.pickupPhotoRef is string && data.pickupPhotoRef.size() <= 256)) &&
-        (!data.keys().hasAny(['cancellationReason']) || (data.cancellationReason is string && data.cancellationReason.size() <= 240)) &&
-        (!data.keys().hasAny(['zoneId']) || isValidId(data.zoneId)) &&
+        (!data.keys().hasAny(['pickupPinProofHash']) || data.pickupPinProofHash == null || isValidId(data.pickupPinProofHash)) &&
+        (!data.keys().hasAny(['deliveryPinProofHash']) || data.deliveryPinProofHash == null || isValidId(data.deliveryPinProofHash)) &&
+        (!data.keys().hasAny(['pickupPhotoRef']) || data.pickupPhotoRef == null || (data.pickupPhotoRef is string && data.pickupPhotoRef.size() <= 256)) &&
+        (!data.keys().hasAny(['cancellationReason']) || data.cancellationReason == null || (data.cancellationReason is string && data.cancellationReason.size() <= 240)) &&
+        (!data.keys().hasAny(['zoneId']) || data.zoneId == null || isValidId(data.zoneId)) &&
         data.createdAt is timestamp &&
-        (!data.keys().hasAny(['assignedAt']) || data.assignedAt is timestamp) &&
-        (!data.keys().hasAny(['pickedUpAt']) || data.pickedUpAt is timestamp) &&
-        (!data.keys().hasAny(['completedAt']) || data.completedAt is timestamp) &&
+        (!data.keys().hasAny(['assignedAt']) || data.assignedAt == null || data.assignedAt is timestamp) &&
+        (!data.keys().hasAny(['pickedUpAt']) || data.pickedUpAt == null || data.pickedUpAt is timestamp) &&
+        (!data.keys().hasAny(['completedAt']) || data.completedAt == null || data.completedAt is timestamp) &&
         data.updatedAt is timestamp;
     }
 
@@ -597,6 +598,7 @@ service cloud.firestore {
     // /deliveryJobs/{jobId} — Core Dispatch & Lifecycle
     match /deliveryJobs/{jobId} {
       allow get: if isSignedIn() && isValidId(jobId) && (
+        resource == null ||
         (resource != null && (
           existing().shopOwnerUid == request.auth.uid ||
           (existing().keys().hasAny(['riderUid']) && existing().riderUid == request.auth.uid) ||
@@ -656,8 +658,13 @@ service cloud.firestore {
                 incoming().diff(existing()).affectedKeys().hasOnly(['riderId', 'riderUid', 'riderName', 'riderPhone', 'deliveryStatus', 'assignedAt', 'updatedAt'])
               ) ||
               (existing().keys().hasAny(['riderUid']) && existing().riderUid == request.auth.uid && (
-                (existing().deliveryStatus == 'ASSIGNED' && incoming().deliveryStatus == 'ACCEPTED' &&
-                  incoming().diff(existing()).affectedKeys().hasOnly(['deliveryStatus', 'assignedAt', 'updatedAt'])) ||
+                (existing().deliveryStatus in ['PENDING_DISPATCH', 'ASSIGNED'] &&
+                  incoming().deliveryStatus == 'ACCEPTED' &&
+                  incoming().riderUid == request.auth.uid &&
+                  incoming().riderId == request.auth.uid &&
+                  exists(/databases/$(database)/documents/riders/$(request.auth.uid)) &&
+                  get(/databases/$(database)/documents/riders/$(request.auth.uid)).data.approvalStatus == 'APPROVED' &&
+                  incoming().diff(existing()).affectedKeys().hasOnly(['riderId', 'riderUid', 'riderName', 'riderPhone', 'deliveryStatus', 'assignedAt', 'updatedAt'])) ||
                 (existing().deliveryStatus == 'ACCEPTED' && incoming().deliveryStatus == 'ARRIVED_AT_PICKUP' &&
                   incoming().diff(existing()).affectedKeys().hasOnly(['deliveryStatus', 'updatedAt'])) ||
                 (existing().deliveryStatus == 'ARRIVED_AT_PICKUP' && incoming().deliveryStatus == 'PICKED_UP' &&
@@ -685,8 +692,20 @@ service cloud.firestore {
 
       // /deliveryJobs/{jobId}/evidence/{evidenceId} — Pickup Photos
       match /evidence/{evidenceId} {
-        allow get, list: if isSignedIn() && isValidId(jobId) && isValidId(evidenceId) && (
+        allow get: if isSignedIn() && isValidId(jobId) && isValidId(evidenceId) && (
+          (resource == null &&
+            exists(/databases/$(database)/documents/deliveryJobs/$(jobId)) &&
+            (
+              get(/databases/$(database)/documents/deliveryJobs/$(jobId)).data.shopOwnerUid == request.auth.uid ||
+              get(/databases/$(database)/documents/deliveryJobs/$(jobId)).data.riderUid == request.auth.uid
+            )
+          ) ||
           (resource != null && (existing().shopOwnerUid == request.auth.uid || existing().riderUid == request.auth.uid)) ||
+          isDispatcherOrAdmin()
+        );
+        allow list: if isSignedIn() && isValidId(jobId) && (
+          resource.data.shopOwnerUid == request.auth.uid ||
+          resource.data.riderUid == request.auth.uid ||
           isDispatcherOrAdmin()
         );
         allow create: if isVerifiedUser() && isValidId(jobId) && isValidId(evidenceId) &&
@@ -702,12 +721,15 @@ service cloud.firestore {
 
     // /trackingLinks/{tokenHash} — Non-enumerable Public Customer Tracking Projection
     match /trackingLinks/{tokenHash} {
-      allow get: if isValidId(tokenHash) && resource != null && (
-        (existing().active == true && existing().expiresAt > request.time) ||
-        (isSignedIn() && (
-          existing().shopOwnerUid == request.auth.uid ||
-          (existing().keys().hasAny(['riderUid']) && existing().riderUid == request.auth.uid) ||
-          isDispatcherOrAdmin()
+      allow get: if isValidId(tokenHash) && (
+        (isSignedIn() && resource == null) ||
+        (resource != null && (
+          (existing().active == true && existing().expiresAt > request.time) ||
+          (isSignedIn() && (
+            existing().shopOwnerUid == request.auth.uid ||
+            (existing().keys().hasAny(['riderUid']) && existing().riderUid == request.auth.uid) ||
+            isDispatcherOrAdmin()
+          ))
         ))
       );
       allow list: if false;
@@ -790,7 +812,12 @@ service cloud.firestore {
     // /riderSettlements/{settlementId} — Rider Earnings & Admin Reconciliation
     match /riderSettlements/{settlementId} {
       allow get: if isSignedIn() && isValidId(settlementId) && (
-        (resource != null && existing().riderUid == request.auth.uid) || isAdmin()
+        (resource == null &&
+          exists(/databases/$(database)/documents/deliveryJobs/$(settlementId)) &&
+          get(/databases/$(database)/documents/deliveryJobs/$(settlementId)).data.riderUid == request.auth.uid
+        ) ||
+        (resource != null && existing().riderUid == request.auth.uid) ||
+        isAdmin()
       );
       allow list: if isSignedIn() && (
         resource.data.riderUid == request.auth.uid || isAdmin()

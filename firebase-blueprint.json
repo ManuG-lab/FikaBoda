@@ -187,7 +187,7 @@
         "deliveryFee": { "type": "number" },
         "riderEarning": { "type": "number" },
         "platformRevenue": { "type": "number" },
-        "paymentStatus": { "type": "string", "enum": ["UNPAID", "PENDING_STK", "PAID", "FAILED", "REFUNDED"] },
+        "paymentStatus": { "type": "string", "enum": ["INITIATED", "UNPAID", "PENDING_STK", "AWAITING_CONFIG", "PAID", "FAILED", "REFUNDED"] },
         "deliveryStatus": {
           "type": "string",
           "enum": [
